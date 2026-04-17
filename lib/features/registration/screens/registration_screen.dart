@@ -22,7 +22,8 @@ enum RegistrationPose {
 }
 
 class RegistrationScreen extends ConsumerStatefulWidget {
-  const RegistrationScreen({super.key});
+  final Employee? editEmployee;
+  const RegistrationScreen({super.key, this.editEmployee});
 
   @override
   ConsumerState<RegistrationScreen> createState() => _RegistrationScreenState();
@@ -58,6 +59,16 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
   String _statusMessage = 'Look directly at the camera';
   String _errorMessage = '';
 
+  @override
+  void initState() {
+    super.initState();
+    if (widget.editEmployee != null) {
+      _nameController.text = widget.editEmployee!.name;
+      _ageController.text = widget.editEmployee!.age.toString();
+      _positionController.text = widget.editEmployee!.position;
+      _selectedSex = widget.editEmployee!.sex;
+    }
+  }
   @override
   void dispose() {
     _nameController.dispose();
@@ -202,38 +213,57 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
 
     try {
       final db = DatabaseService.instance;
-      final count = await db.getEmployeeCount();
-      
-      // Auto-generate ID: EMP-001, EMP-002...
-      final newIdNumber = 'EMP-${(count + 1).toString().padLeft(3, '0')}';
-      
-      // The first person registered in the system is automatically the Admin
-      final bool isAdmin = count == 0;
-
       final avgEmbedding = _averageEmbeddings(_capturedEmbeddings);
       final name = _nameController.text.trim();
       final age = int.tryParse(_ageController.text.trim()) ?? 0;
       final position = _positionController.text.trim();
 
-      await db.insertEmployee(
-        Employee(
+      if (widget.editEmployee != null) {
+        // EDIT MODE: Update existing record
+        final updated = Employee(
+          id: widget.editEmployee!.id,
           name: name,
           age: age,
           sex: _selectedSex,
           position: position,
-          empId: newIdNumber,
-          isAdmin: isAdmin,
+          empId: widget.editEmployee!.empId, // Keep original ID
+          isAdmin: widget.editEmployee!.isAdmin, // Keep original rights
           facialEmbedding: avgEmbedding,
-        ),
-      );
+        );
+        await db.updateEmployee(updated);
+        
+        if (mounted) {
+          setState(() {
+            _step = RegistrationStep.success;
+            _statusMessage = 'Profile updated successfully!';
+          });
+        }
+      } else {
+        // ENROLL MODE: Insert new record
+        final count = await db.getEmployeeCount();
+        final newIdNumber = 'EMP-${(count + 1).toString().padLeft(3, '0')}';
+        final bool isAdmin = count == 0;
 
-      if (mounted) {
-        setState(() {
-          _step = RegistrationStep.success;
-          _statusMessage = isAdmin 
-              ? '$name registered as SYSTEM ADMIN!' 
-              : '$name has been registered! ID: $newIdNumber';
-        });
+        await db.insertEmployee(
+          Employee(
+            name: name,
+            age: age,
+            sex: _selectedSex,
+            position: position,
+            empId: newIdNumber,
+            isAdmin: isAdmin,
+            facialEmbedding: avgEmbedding,
+          ),
+        );
+
+        if (mounted) {
+          setState(() {
+            _step = RegistrationStep.success;
+            _statusMessage = isAdmin 
+                ? '$name registered as SYSTEM ADMIN!' 
+                : '$name has been registered! ID: $newIdNumber';
+          });
+        }
       }
     } catch (e) {
       if (mounted) {
@@ -497,9 +527,9 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
   @override
   Widget build(BuildContext context) {
     String title = switch (_step) {
-      RegistrationStep.enterName => 'Register Employee',
-      RegistrationStep.scanFace => 'Enroll Face',
-      RegistrationStep.processing => 'Enrolling…',
+      RegistrationStep.enterName => widget.editEmployee != null ? 'Update Profile' : 'Register Employee',
+      RegistrationStep.scanFace => widget.editEmployee != null ? 'Re-enroll Face' : 'Enroll Face',
+      RegistrationStep.processing => widget.editEmployee != null ? 'Updating…' : 'Enrolling…',
       RegistrationStep.success => 'Complete',
       RegistrationStep.error => 'Failure',
     };

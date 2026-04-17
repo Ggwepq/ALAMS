@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../core/database/database_service.dart';
 
 class AdminDashboard extends StatelessWidget {
   const AdminDashboard({super.key});
@@ -123,6 +124,44 @@ class AdminDashboard extends StatelessWidget {
                 ),
                 Spacer(),
                 Icon(Icons.arrow_forward_ios, color: Colors.white54, size: 16),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+        // Edit My Profile Button
+        InkWell(
+          onTap: () async {
+            final db = DatabaseService.instance;
+            final employees = await db.getAllEmployees();
+            final admin = employees.firstWhere((e) => e.isAdmin);
+            if (context.mounted) {
+              Navigator.pushNamed(context, '/register', arguments: admin);
+            }
+          },
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.05),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: Colors.white10),
+            ),
+            child: const Row(
+              children: [
+                Icon(Icons.manage_accounts_outlined, color: Colors.tealAccent, size: 28),
+                SizedBox(width: 16),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Edit My Profile', 
+                        style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                    Text('Update credentials or re-scan face', 
+                        style: TextStyle(color: Colors.white38, fontSize: 12)),
+                  ],
+                ),
+                Spacer(),
+                Icon(Icons.chevron_right, color: Colors.white24, size: 16),
               ],
             ),
           ),

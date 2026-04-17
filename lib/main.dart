@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'features/onboarding/screens/onboarding_screen.dart';
 import 'features/admin/screens/admin_dashboard.dart';
 import 'features/attendance/screens/attendance_history_screen.dart';
 import 'features/attendance/screens/action_screen.dart';
@@ -9,6 +10,7 @@ import 'features/face_recognition/screens/camera_screen.dart';
 import 'features/registration/screens/employee_list_screen.dart';
 import 'features/registration/screens/registration_screen.dart';
 import 'features/reports/screens/reports_screen.dart';
+import 'core/database/database_service.dart';
 import 'core/models/employee.dart';
 
 // Global route observer to detect when screens come into focus
@@ -61,7 +63,7 @@ class AlamsApp extends StatelessWidget {
         switch (settings.name) {
           case '/':
             return MaterialPageRoute(
-              builder: (_) => const CameraScreen(),
+              builder: (_) => const RootGuardian(),
             );
 
           case '/action':
@@ -94,8 +96,9 @@ class AlamsApp extends StatelessWidget {
             );
 
           case '/register':
+            final editEmployee = settings.arguments as Employee?;
             return PageRouteBuilder(
-              pageBuilder: (ctx, anim, secAnim) => const RegistrationScreen(),
+              pageBuilder: (ctx, anim, secAnim) => RegistrationScreen(editEmployee: editEmployee),
               transitionsBuilder: (ctx, anim, secAnim, child) {
                 return SlideTransition(
                   position: Tween<Offset>(
@@ -148,5 +151,40 @@ class AlamsApp extends StatelessWidget {
         }
       },
     );
+  }
+}
+
+/// The RootGuardian checks if the system has an administrator.
+/// If not, it redirects to the Onboarding screen.
+class RootGuardian extends StatefulWidget {
+  const RootGuardian({super.key});
+
+  @override
+  State<RootGuardian> createState() => _RootGuardianState();
+}
+
+class _RootGuardianState extends State<RootGuardian> {
+  bool? _hasAdmin;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkAdmin();
+  }
+
+  Future<void> _checkAdmin() async {
+    final hasAdmin = await DatabaseService.instance.hasAdmin();
+    if (mounted) setState(() => _hasAdmin = hasAdmin);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_hasAdmin == null) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator(color: Colors.teal)),
+      );
+    }
+
+    return _hasAdmin! ? const CameraScreen() : const OnboardingScreen();
   }
 }

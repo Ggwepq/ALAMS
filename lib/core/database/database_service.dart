@@ -84,6 +84,24 @@ class DatabaseService {
     return await db.delete('employees', where: 'id = ?', whereArgs: [id]);
   }
 
+  Future<int> updateEmployee(Employee employee) async {
+    final db = await instance.database;
+    return await db.update(
+      'employees',
+      employee.toMap(),
+      where: 'id = ?',
+      whereArgs: [employee.id],
+    );
+  }
+
+  /// Checks if any employee with administrative privileges exists.
+  Future<bool> hasAdmin() async {
+    final db = await instance.database;
+    final result = await db.rawQuery('SELECT COUNT(*) FROM employees WHERE is_admin = 1');
+    final count = Sqflite.firstIntValue(result) ?? 0;
+    return count > 0;
+  }
+
   // ─── Attendance ─────────────────────────────────────────────────────────────
 
   Future<int> insertAttendance(Attendance attendance) async {
