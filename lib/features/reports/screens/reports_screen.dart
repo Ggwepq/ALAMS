@@ -14,8 +14,12 @@ class ReportsScreen extends ConsumerStatefulWidget {
 
 class _ReportsScreenState extends ConsumerState<ReportsScreen> {
   int _totalPresentToday = 0;
-  int _totalLogsToday = 0;
   int _totalEmployees = 0;
+
+  // Filters
+  String _searchQuery = '';
+  String _typeFilter = 'All'; // 'All', 'IN', 'OUT'
+  DateTime? _dateFilter; // null means Today
 
   @override
   void initState() {
@@ -37,7 +41,6 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
     if (mounted) {
       setState(() {
         _totalPresentToday = presentEmpIds.length;
-        _totalLogsToday = logsToday.length;
         _totalEmployees = allEmployees.length;
       });
     }
@@ -45,7 +48,6 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Watch the logs with names
     final logsAsync = ref.watch(attendanceLogsWithNamesProvider);
 
     return Scaffold(
@@ -56,6 +58,14 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
         title: const Text('Attendance Reports', 
             style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
         iconTheme: const IconThemeData(color: Colors.white),
+        actions: [
+          IconButton(
+            onPressed: () => Navigator.of(context).pushNamed('/employees'),
+            icon: const Icon(Icons.manage_accounts_rounded, color: Colors.tealAccent),
+            tooltip: 'Manage Registered Persons',
+          ),
+          const SizedBox(width: 8),
+        ],
       ),
       body: RefreshIndicator(
         color: Colors.tealAccent,
@@ -67,11 +77,12 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
         child: CustomScrollView(
           physics: const AlwaysScrollableScrollPhysics(),
           slivers: [
-            // Metrics Header
+            // ── Metrics & Filters Header ──────────────────────────────────
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.all(20),
                 child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Row(
                       children: [
@@ -95,56 +106,130 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
                       ],
                     ),
                     const SizedBox(height: 16),
-                    _MetricCard(
-                      title: 'Total Scans (Today)',
-                      value: _totalLogsToday.toString(),
-                      icon: Icons.history,
-                      color: Colors.blueAccent,
-                      fullWidth: true,
+                    
+                    // Filter Bar
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withAlpha(10),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: Colors.white10),
+                      ),
+                      child: Column(
+                        children: [
+                          TextField(
+                            onChanged: (v) => setState(() => _searchQuery = v),
+                            style: const TextStyle(color: Colors.white),
+                            decoration: InputDecoration(
+                              hintText: 'Search by name...',
+                              hintStyle: const TextStyle(color: Colors.white38),
+                              prefixIcon: const Icon(Icons.search, color: Colors.white38),
+                              isDense: true,
+                              filled: true,
+                              fillColor: Colors.black26,
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12),
+                                borderSide: BorderSide.none,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          Row(
+                            children: [
+                              // Type Filter
+                              Expanded(
+                                child: SegmentedButton<String>(
+                                  segments: const [
+                                    ButtonSegment(value: 'All', label: Text('All', style: TextStyle(fontSize: 12))),
+                                    ButtonSegment(value: 'IN', label: Text('IN', style: TextStyle(fontSize: 12))),
+                                    ButtonSegment(value: 'OUT', label: Text('OUT', style: TextStyle(fontSize: 12))),
+                                  ],
+                                  selected: {_typeFilter},
+                                  onSelectionChanged: (set) => setState(() => _typeFilter = set.first),
+                                  style: ButtonStyle(
+                                    visualDensity: VisualDensity.compact,
+                                    backgroundColor: WidgetStateProperty.resolveWith((states) {
+                                      if (states.contains(WidgetState.selected)) return Colors.teal;
+                                      return Colors.transparent;
+                                    }),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              // Date Filter
+                              IconButton.filledTonal(
+                                onPressed: () async {
+                                  final picked = await showDatePicker(
+                                    context: context,
+                                    initialDate: _dateFilter ?? DateTime.now(),
+                                    firstDate: DateTime(2024),
+                                    lastDate: DateTime.now(),
+                                  );
+                                  setState(() => _dateFilter = picked);
+                                },
+                                icon: Icon(_dateFilter == null ? Icons.today : Icons.event, size: 20),
+                                style: IconButton.styleFrom(
+                                  backgroundColor: _dateFilter == null ? Colors.white10 : Colors.teal.withAlpha(50),
+                                  foregroundColor: _dateFilter == null ? Colors.white70 : Colors.tealAccent,
+                                ),
+                              ),
+                              if (_dateFilter != null)
+                                IconButton(
+                                  onPressed: () => setState(() => _dateFilter = null),
+                                  icon: const Icon(Icons.close, size: 18, color: Colors.white38),
+                                ),
+                            ],
+                          ),
+                        ],
+                      ),
                     ),
                   ],
                 ),
               ),
             ),
 
-            // Section Title
-            const SliverToBoxAdapter(
-              child: Padding(
-                padding: EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-                child: Text('All Logs', style: TextStyle(color: Colors.white54, fontSize: 13, fontWeight: FontWeight.w600, letterSpacing: 1.2)),
-              ),
-            ),
-
-            // List
+            // ── Logs List ────────────────────────────────────────────────
             logsAsync.when(
               data: (logs) {
-                if (logs.isEmpty) {
+                // Apply manual filtering
+                final filteredLogs = logs.where((log) {
+                  final name = (log['employee_name'] as String? ?? 'Deleted Employee').toLowerCase();
+                  if (_searchQuery.isNotEmpty && !name.contains(_searchQuery.toLowerCase())) return false;
+                  
+                  if (_typeFilter != 'All' && log['type'] != _typeFilter) return false;
+                  
+                  if (_dateFilter != null) {
+                    final logDate = DateTime.parse(log['timestamp'] as String);
+                    if (logDate.year != _dateFilter!.year ||
+                        logDate.month != _dateFilter!.month ||
+                        logDate.day != _dateFilter!.day) {
+                      return false;
+                    }
+                  }
+                  
+                  return true;
+                }).toList();
+
+                if (filteredLogs.isEmpty) {
                   return const SliverFillRemaining(
                     child: Center(
-                      child: Text('No attendance logs yet.', style: TextStyle(color: Colors.white54)),
+                      child: Text('No matching logs found.', style: TextStyle(color: Colors.white54)),
                     ),
                   );
                 }
 
                 return SliverPadding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
                   sliver: SliverList(
                     delegate: SliverChildBuilderDelegate(
-                      (context, index) {
-                        final logMap = logs[index];
-                        return _LogTile(logMap: logMap);
-                      },
-                      childCount: logs.length,
+                      (context, index) => _LogTile(logMap: filteredLogs[index]),
+                      childCount: filteredLogs.length,
                     ),
                   ),
                 );
               },
-              loading: () => const SliverFillRemaining(
-                child: Center(child: CircularProgressIndicator(color: Colors.teal)),
-              ),
-              error: (e, st) => SliverFillRemaining(
-                child: Center(child: Text('Error: $e', style: const TextStyle(color: Colors.redAccent))),
-              ),
+              loading: () => const SliverFillRemaining(child: Center(child: CircularProgressIndicator(color: Colors.teal))),
+              error: (e, st) => SliverFillRemaining(child: Center(child: Text('Error: $e', style: const TextStyle(color: Colors.redAccent)))),
             ),
           ],
         ),
@@ -160,20 +245,17 @@ class _MetricCard extends StatelessWidget {
   final String value;
   final IconData icon;
   final Color color;
-  final bool fullWidth;
 
   const _MetricCard({
     required this.title,
     required this.value,
     required this.icon,
     required this.color,
-    this.fullWidth = false,
   });
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: fullWidth ? double.infinity : null,
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         color: Colors.white10,
@@ -183,28 +265,20 @@ class _MetricCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Icon(icon, color: color, size: 28),
-              if (fullWidth) ...[
-                const Spacer(),
-                Text(
-                  value,
-                  style: const TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.bold),
-                ),
-              ],
-            ],
-          ),
+          Icon(icon, color: color, size: 28),
           const SizedBox(height: 16),
-          if (!fullWidth)
-            Text(
-              value,
-              style: const TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.bold),
-            ),
+          Text(
+            value,
+            style: const TextStyle(
+                color: Colors.white, fontSize: 32, fontWeight: FontWeight.bold),
+          ),
           const SizedBox(height: 4),
           Text(
             title,
-            style: const TextStyle(color: Colors.white60, fontSize: 13, fontWeight: FontWeight.w500),
+            style: const TextStyle(
+                color: Colors.white60,
+                fontSize: 13,
+                fontWeight: FontWeight.w500),
           ),
         ],
       ),

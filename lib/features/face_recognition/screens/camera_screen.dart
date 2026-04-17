@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:camera/camera.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
@@ -8,6 +9,7 @@ import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import '../../../core/database/database_service.dart';
 import '../../../core/utils/image_utils.dart';
 import '../providers/face_recognition_provider.dart';
+import '../services/face_recognition_service.dart';
 import '../services/liveness_service.dart';
 
 class CameraScreen extends ConsumerStatefulWidget {
@@ -22,6 +24,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
   bool _isCameraInitialized = false;
   bool _isProcessingFrame = false;
   String? _cameraErrorMessage;
+  DateTime _nextAvailableRecognition = DateTime.now();
 
   // Throttle: process one frame every 400ms to avoid overwhelming low-end devices.
   DateTime _lastProcessed = DateTime.fromMillisecondsSinceEpoch(0);
@@ -82,6 +85,13 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
   // ─── Frame Processing Loop ───────────────────────────────────────────────
 
   void _onCameraFrame(CameraImage image) async {
+    // 1. Check if window is visible (Fix background scanning bug)
+    if (!mounted) return;
+    if (!(ModalRoute.of(context)?.isCurrent ?? false)) return;
+
+    // 2. Cooldown check
+    if (DateTime.now().isBefore(_nextAvailableRecognition)) return;
+
     if (_isProcessingFrame) return;
     final now = DateTime.now();
     if (now.difference(_lastProcessed) < _processingInterval) return;
@@ -111,19 +121,26 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
       // Only proceed to recognition after liveness passes
       if (livenessState != LivenessState.passed) return;
 
-      // Step 2: Generate embedding
+      // Step 2: Preprocessed Image (In Isolate to fix lag)
       final faceService = ref.read(faceRecognitionServiceProvider);
-      final preprocessed = faceService.preprocessCameraImage(image);
-      if (preprocessed == null) return;
+      final preprocessed = await compute(FaceRecognitionService.preprocessCameraImage, image);
+      if (preprocessed == null) {
+        livenessService.reset(); // Error, reset for safety
+        return;
+      }
 
+      // Step 3: Generate embedding (TFLite Inference usually runs on native worker)
       final liveEmbedding = faceService.generateEmbedding(preprocessed);
-      if (liveEmbedding == null) return;
+      if (liveEmbedding == null) {
+        livenessService.reset();
+        return;
+      }
 
-      // Step 3: Match against DB employees
+      // Step 4: Match against DB (In Isolate if list is large)
       final employees = await DatabaseService.instance.getAllEmployees();
-      
       if (employees.isEmpty) {
         _showUnrecognizedBanner('No employees registered.');
+        livenessService.reset();
         return;
       }
 
@@ -131,25 +148,27 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
           .map((e) => MapEntry(e.name, e.facialEmbedding))
           .toList();
 
-      final result = faceService.findBestMatch(liveEmbedding, knownFaces);
+      // For extra smoothness, match in isolate too
+      final result = await compute((data) {
+        return FaceRecognitionService.findBestMatch(data.key, data.value);
+      }, MapEntry(liveEmbedding, knownFaces));
+
+      // Always reset liveness for the NEXT frame/attempt
+      livenessService.reset();
 
       if (result.isRecognized) {
         ref.read(recognizedEmployeeProvider.notifier).set(result.label);
-        debugPrint(
-            '[Camera] Recognized: ${result.label} (dist: ${result.distance.toStringAsFixed(3)})');
-
-        // Pause stream so we don't keep re-firing recognition callbacks
+        
+        // Pause stream and set navigation cooldown
         await _cameraController?.stopImageStream();
+        _nextAvailableRecognition = DateTime.now().add(const Duration(seconds: 5));
 
-        // Navigate to action screen
         if (mounted) {
           await Navigator.of(context).pushNamed('/action', arguments: result.label);
           
           // RESTART stream when coming back
           if (mounted && _cameraController != null) {
             _cameraController!.startImageStream(_onCameraFrame);
-            // Reset liveness state for the next person
-            ref.read(livenessServiceProvider).reset();
             ref.read(livenessStateProvider.notifier).set(LivenessState.waiting);
           }
         }
@@ -157,6 +176,8 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
         ref.read(recognizedEmployeeProvider.notifier).set(null);
         _showUnrecognizedBanner('Face not recognized.');
       }
+    } catch (e) {
+      debugPrint('[Camera] Frame error: $e');
     } finally {
       _isProcessingFrame = false;
     }
@@ -239,8 +260,8 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
             mainAxisSize: MainAxisSize.min,
             children: [
               CircularProgressIndicator(color: Colors.teal),
-              const SizedBox(height: 16),
-              const Text('Starting camera…', style: TextStyle(color: Colors.white60)),
+              SizedBox(height: 16),
+              Text('Starting camera…', style: TextStyle(color: Colors.white60)),
             ],
           ),
         ),

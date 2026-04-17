@@ -106,7 +106,7 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
 
       // Generate embedding
       final faceService = FaceRecognitionService.instance;
-      final preprocessed = faceService.preprocessCameraImage(image);
+      final preprocessed = FaceRecognitionService.preprocessCameraImage(image);
       if (preprocessed == null) return;
       final embedding = faceService.generateEmbedding(preprocessed);
       if (embedding == null) return;

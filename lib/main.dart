@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'features/attendance/screens/action_screen.dart';
 import 'features/face_recognition/screens/camera_screen.dart';
+import 'features/registration/screens/employee_list_screen.dart';
 import 'features/registration/screens/registration_screen.dart';
 import 'features/reports/screens/reports_screen.dart';
 
@@ -97,6 +98,22 @@ class AlamsApp extends StatelessWidget {
                 return SlideTransition(
                   position: Tween<Offset>(
                     begin: const Offset(-1, 0), // slide in from left
+                    end: Offset.zero,
+                  ).animate(CurvedAnimation(
+                      parent: anim, curve: Curves.easeOutCubic)),
+                  child: child,
+                );
+              },
+              transitionDuration: const Duration(milliseconds: 350),
+            );
+
+          case '/employees':
+            return PageRouteBuilder(
+              pageBuilder: (ctx, anim, secAnim) => const EmployeeListScreen(),
+              transitionsBuilder: (ctx, anim, secAnim, child) {
+                return SlideTransition(
+                  position: Tween<Offset>(
+                    begin: const Offset(0, 1), // slide up from bottom
                     end: Offset.zero,
                   ).animate(CurvedAnimation(
                       parent: anim, curve: Curves.easeOutCubic)),

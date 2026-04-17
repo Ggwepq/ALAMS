@@ -48,7 +48,8 @@ class FaceRecognitionService {
   bool get isLoaded => _isLoaded;
 
   /// Converts a [CameraImage] (YUV420) to a 160x160 RGB image for FaceNet.
-  img.Image? preprocessCameraImage(CameraImage cameraImage) {
+  /// Static so it can be used in an Isolate via compute.
+  static img.Image? preprocessCameraImage(CameraImage cameraImage) {
     try {
       final planes = cameraImage.planes;
       final yPlane = planes[0];
@@ -137,7 +138,7 @@ class FaceRecognitionService {
   }
 
   /// Compute cosine distance (lower = more similar, 0.0 = identical).
-  double cosineDistance(List<double> a, List<double> b) {
+  static double cosineDistance(List<double> a, List<double> b) {
     double dot = 0, normA = 0, normB = 0;
     for (int i = 0; i < a.length; i++) {
       dot += a[i] * b[i];
@@ -150,7 +151,7 @@ class FaceRecognitionService {
 
   /// Match a live embedding against a list of stored embeddings.
   /// Returns the closest match if within [threshold].
-  RecognitionResult findBestMatch(
+  static RecognitionResult findBestMatch(
     List<double> liveEmbedding,
     List<MapEntry<String, List<double>>> knownFaces, {
     double threshold = 0.6,
