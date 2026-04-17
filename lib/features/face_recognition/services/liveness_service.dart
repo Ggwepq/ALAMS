@@ -32,12 +32,17 @@ class LivenessService {
 
   LivenessState get state => _state;
 
+  int _closedFrames = 0;
+  static const int _minClosedFrames = 2; // Reduced from 3 to be more responsive but still secure
+
   /// Process a single [InputImage] frame. Returns updated [LivenessState].
   Future<LivenessState> processFrame(InputImage inputImage) async {
     final faces = await _detector.processImage(inputImage);
 
     if (faces.isEmpty) {
       _state = LivenessState.waiting;
+      _eyeWasClosed = false;
+      _closedFrames = 0;
       return _state;
     }
 
@@ -60,15 +65,25 @@ class LivenessService {
     final bool eyesCurrentlyClosed = avgOpen < _eyeClosedThreshold;
     final bool eyesCurrentlyOpen = avgOpen > _eyeOpenThreshold;
 
-    // Transition: open -> closed = blink start
-    if (!_eyeWasClosed && eyesCurrentlyClosed) {
+    // Transition Logic:
+    // 1. If eyes are closed, start/continue counting closed frames.
+    if (eyesCurrentlyClosed) {
+      _closedFrames++;
       _eyeWasClosed = true;
-    }
-    // Transition: closed -> open = blink complete
-    if (_eyeWasClosed && eyesCurrentlyOpen) {
+    } 
+    // 2. If eyes were closed and are now open, check if it was a valid blink.
+    else if (_eyeWasClosed && eyesCurrentlyOpen) {
+      if (_closedFrames >= _minClosedFrames) {
+        _blinkCount++;
+        debugPrint('[Liveness] Valid blink detected. Total: $_blinkCount');
+      }
       _eyeWasClosed = false;
-      _blinkCount++;
-      debugPrint('[Liveness] Blink detected. Count: $_blinkCount');
+      _closedFrames = 0;
+    }
+    // 3. Reset if eyes are just open and we haven't started a blink.
+    else if (eyesCurrentlyOpen) {
+      _eyeWasClosed = false;
+      _closedFrames = 0;
     }
 
     if (_blinkCount >= 1) {

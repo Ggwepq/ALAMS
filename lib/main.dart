@@ -8,6 +8,9 @@ import 'features/registration/screens/employee_list_screen.dart';
 import 'features/registration/screens/registration_screen.dart';
 import 'features/reports/screens/reports_screen.dart';
 
+// Global route observer to detect when screens come into focus
+final RouteObserver<ModalRoute<void>> routeObserver = RouteObserver<ModalRoute<void>>();
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
@@ -39,6 +42,7 @@ class AlamsApp extends StatelessWidget {
     return MaterialApp(
       title: 'ALAMS',
       debugShowCheckedModeBanner: false,
+      navigatorObservers: [routeObserver],
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
           seedColor: Colors.teal,

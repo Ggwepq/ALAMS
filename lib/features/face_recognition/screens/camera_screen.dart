@@ -8,6 +8,7 @@ import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 
 import '../../../core/database/database_service.dart';
 import '../../../core/utils/image_utils.dart';
+import '../../../main.dart';
 import '../providers/face_recognition_provider.dart';
 import '../services/face_recognition_service.dart';
 import '../services/liveness_service.dart';
@@ -19,7 +20,7 @@ class CameraScreen extends ConsumerStatefulWidget {
   ConsumerState<CameraScreen> createState() => _CameraScreenState();
 }
 
-class _CameraScreenState extends ConsumerState<CameraScreen> {
+class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
   CameraController? _cameraController;
   bool _isCameraInitialized = false;
   bool _isProcessingFrame = false;
@@ -36,9 +37,39 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
     _initCamera();
   }
 
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Subscribe to route observer to detect when we return to this screen
+    final route = ModalRoute.of(context);
+    if (route != null) {
+      routeObserver.subscribe(this, route);
+    }
+  }
+
+  @override
+  void dispose() {
+    routeObserver.unsubscribe(this);
+    _cameraController?.dispose();
+    super.dispose();
+  }
+
+  @override
+  void didPopNext() {
+    // This is called when the top route was popped and this route is visible again
+    debugPrint('[Camera] Returned to screen. Re-initializing camera…');
+    _initCamera();
+  }
+
   // ─── Camera Setup ────────────────────────────────────────────────────────
 
   Future<void> _initCamera() async {
+    // If already initialized, dispose first to avoid hardware locks
+    if (_cameraController != null) {
+      await _cameraController!.dispose();
+      _cameraController = null;
+    }
+
     try {
       final cameras = await availableCameras();
       if (cameras.isEmpty) {
@@ -207,12 +238,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen> {
     );
   }
 
-  @override
-  void dispose() {
-    _cameraController?.stopImageStream();
-    _cameraController?.dispose();
-    super.dispose();
-  }
+
 
   // ─── Build ───────────────────────────────────────────────────────────────
 
