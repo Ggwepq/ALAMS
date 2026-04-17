@@ -1,11 +1,18 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/database/database_service.dart';
+import '../../attendance/providers/attendance_provider.dart';
+import '../../registration/providers/employee_provider.dart';
 
-class AdminDashboard extends StatelessWidget {
+class AdminDashboard extends ConsumerWidget {
   const AdminDashboard({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final workingCount = ref.watch(currentlyWorkingProvider).when(data: (d) => d.length, loading: () => 0, error: (_, __) => 0);
+    final absentCount = ref.watch(absentTodayProvider).when(data: (d) => d.length, loading: () => 0, error: (_, __) => 0);
+    final totalCount = ref.watch(employeesProvider).when(data: (d) => d.length, loading: () => 0, error: (_, __) => 0);
+
     return Scaffold(
       backgroundColor: const Color(0xFF0D1117),
       appBar: AppBar(
@@ -20,27 +27,66 @@ class AdminDashboard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             _buildHeader(),
+            const SizedBox(height: 24),
+            
+            // Insight Cards Row
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                   _InsightCard(
+                    label: 'At Work',
+                    value: workingCount.toString(),
+                    icon: Icons.check_circle_rounded,
+                    color: Colors.tealAccent,
+                  ),
+                  const SizedBox(width: 12),
+                   _InsightCard(
+                    label: 'Absent',
+                    value: absentCount.toString(),
+                    icon: Icons.cancel_rounded,
+                    color: const Color(0xFFE05E5E),
+                  ),
+                  const SizedBox(width: 12),
+                  _InsightCard(
+                    label: 'Total Personnel',
+                    value: totalCount.toString(),
+                    icon: Icons.people_alt_rounded,
+                    color: Colors.blueAccent,
+                  ),
+                ],
+              ),
+            ),
+
             const SizedBox(height: 32),
             _buildQuickActions(context),
             const SizedBox(height: 32),
-            const Text('System Management', 
+            const Text('Management Dashboard', 
                 style: TextStyle(color: Colors.white70, fontSize: 16, fontWeight: FontWeight.w600)),
             const SizedBox(height: 16),
             _buildMenuTile(
               context,
-              title: 'Employee Directory',
-              subtitle: 'Manage and delete registered faces',
+              title: 'View All Employee',
+              subtitle: 'Manage faces and profiles',
               icon: Icons.people_alt_outlined,
               color: Colors.blueAccent,
               route: '/employee_list',
             ),
             _buildMenuTile(
               context,
-              title: 'Attendance Reports',
-              subtitle: 'View and filter all system logs',
+              title: 'View Attendance Logs',
+              subtitle: 'Check time ins and outs',
               icon: Icons.bar_chart_rounded,
               color: Colors.purpleAccent,
               route: '/reports',
+            ),
+            _buildMenuTile(
+              context,
+              title: 'Manage Departments',
+              subtitle: 'Add or remove organizations',
+              icon: Icons.business_rounded,
+              color: Colors.orangeAccent,
+              route: '/departments',
             ),
             const SizedBox(height: 40),
             Center(
@@ -195,6 +241,56 @@ class AdminDashboard extends StatelessWidget {
         title: Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
         subtitle: Text(subtitle, style: const TextStyle(color: Colors.white38, fontSize: 12)),
         trailing: const Icon(Icons.chevron_right, color: Colors.white24),
+      ),
+    );
+  }
+}
+
+class _InsightCard extends StatelessWidget {
+  final String label;
+  final String value;
+  final IconData icon;
+  final Color color;
+
+  const _InsightCard({
+    required this.label,
+    required this.value,
+    required this.icon,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 140,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.03),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: Colors.white.withOpacity(0.05)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(icon, color: color, size: 20),
+          ),
+          const SizedBox(height: 16),
+          Text(
+            value,
+            style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            label,
+            style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 12, fontWeight: FontWeight.w500),
+          ),
+        ],
       ),
     );
   }

@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'features/onboarding/screens/onboarding_screen.dart';
+import 'features/attendance/screens/selection_screen.dart';
 import 'features/admin/screens/admin_dashboard.dart';
 import 'features/attendance/screens/attendance_history_screen.dart';
 import 'features/attendance/screens/action_screen.dart';
@@ -12,6 +13,9 @@ import 'features/registration/screens/registration_screen.dart';
 import 'features/reports/screens/reports_screen.dart';
 import 'core/database/database_service.dart';
 import 'core/models/employee.dart';
+
+import 'features/admin/screens/admin_login_screen.dart';
+import 'features/admin/screens/department_management_screen.dart';
 
 // Global route observer to detect when screens come into focus
 final RouteObserver<ModalRoute<void>> routeObserver = RouteObserver<ModalRoute<void>>();
@@ -67,10 +71,13 @@ class AlamsApp extends StatelessWidget {
             );
 
           case '/action':
-            final employee = settings.arguments as Employee;
+            final args = settings.arguments as Map<String, dynamic>;
+            final employee = args['employee'] as Employee;
+            final action = args['action'] as String?; // 'IN' or 'OUT'
+            
             return PageRouteBuilder(
               pageBuilder: (ctx, anim, secAnim) =>
-                  ActionScreen(employee: employee),
+                  ActionScreen(employee: employee, presetAction: action),
               transitionsBuilder: (ctx, anim, secAnim, child) {
                 return SlideTransition(
                   position: Tween<Offset>(
@@ -84,7 +91,24 @@ class AlamsApp extends StatelessWidget {
               transitionDuration: const Duration(milliseconds: 350),
             );
 
+          case '/camera':
+            final mode = settings.arguments as String? ?? 'SCAN';
+            return MaterialPageRoute(
+              builder: (_) => CameraScreen(mode: mode),
+            );
+
+          case '/admin_login':
+            return MaterialPageRoute(
+              builder: (_) => const AdminLoginScreen(),
+            );
+
+          case '/departments':
+            return MaterialPageRoute(
+              builder: (_) => const DepartmentManagementScreen(),
+            );
+
           case '/admin_dash':
+          case '/admin_dashboard':
             return MaterialPageRoute(
               builder: (_) => const AdminDashboard(),
             );
@@ -185,6 +209,6 @@ class _RootGuardianState extends State<RootGuardian> {
       );
     }
 
-    return _hasAdmin! ? const CameraScreen() : const OnboardingScreen();
+    return _hasAdmin! ? const SelectionScreen() : const OnboardingScreen();
   }
 }

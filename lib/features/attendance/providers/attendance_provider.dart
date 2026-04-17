@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/models/attendance.dart';
+import '../../../core/models/employee.dart';
 import '../../../core/providers/database_provider.dart';
 
 // ─── Attendance Log Providers ───────────────────────────────────────────────
@@ -16,15 +17,19 @@ final attendanceLogsWithNamesProvider =
 });
 
 final attendanceLogsTodayProvider =
-    FutureProvider<List<Attendance>>((ref) async {
-  final db = ref.watch(databaseServiceProvider);
-  return db.getAttendanceLogsToday();
-});
-
-final attendanceLogsTodayWithNamesProvider =
     FutureProvider<List<Map<String, dynamic>>>((ref) async {
   final db = ref.watch(databaseServiceProvider);
   return db.getAttendanceLogsWithNamesToday();
+});
+
+final currentlyWorkingProvider = FutureProvider<List<Employee>>((ref) async {
+  final db = ref.watch(databaseServiceProvider);
+  return db.getCurrentlyAtWork();
+});
+
+final absentTodayProvider = FutureProvider<List<Employee>>((ref) async {
+  final db = ref.watch(databaseServiceProvider);
+  return db.getAbsentToday();
 });
 
 // ─── Attendance Actions Notifier ─────────────────────────────────────────────
@@ -68,6 +73,8 @@ class AttendanceNotifier extends Notifier<AttendanceActionState> {
       // Invalidate providers so logs refresh automatically
       ref.invalidate(attendanceLogsProvider);
       ref.invalidate(attendanceLogsTodayProvider);
+      ref.invalidate(currentlyWorkingProvider);
+      ref.invalidate(absentTodayProvider);
 
       state = AttendanceActionState(
         status: AttendanceActionStatus.success,

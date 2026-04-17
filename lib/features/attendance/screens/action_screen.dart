@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:intl/intl.dart';
 
 import '../../../core/database/database_service.dart';
 import '../../../core/models/employee.dart';
@@ -10,8 +9,13 @@ import '../providers/attendance_provider.dart';
 class ActionScreen extends ConsumerStatefulWidget {
   /// The recognized employee passed via route arguments.
   final Employee employee;
+  final String? presetAction; // 'IN' or 'OUT'
 
-  const ActionScreen({super.key, required this.employee});
+  const ActionScreen({
+    super.key, 
+    required this.employee,
+    this.presetAction,
+  });
 
   @override
   ConsumerState<ActionScreen> createState() => _ActionScreenState();
@@ -50,6 +54,10 @@ class _ActionScreenState extends ConsumerState<ActionScreen>
           _lastAction = lastAttendance?.type;
           _isLoading = false;
         });
+        
+        // AUTO-RECORD LOGIC
+        final autoType = (_lastAction == 'IN') ? 'OUT' : 'IN';
+        _record(autoType);
       }
     } else {
       if (mounted) setState(() => _isLoading = false);
@@ -77,39 +85,13 @@ class _ActionScreenState extends ConsumerState<ActionScreen>
     if (!mounted) return;
 
     if (status.status == AttendanceActionStatus.success) {
-      _showResultSnackBar(status.message!, success: true);
       // Reset liveness so we can recognise next person freshly
       ref.read(livenessServiceProvider).reset();
-      ref.read(livenessStateProvider.notifier).set(
-          // reset to waiting
-          // ignore: invalid_use_of_internal_member
-          ref.read(livenessStateProvider)); // refresh widget 
+      
       // Go back to scanner after a short delay
-      await Future.delayed(const Duration(milliseconds: 1200));
+      await Future.delayed(const Duration(milliseconds: 2500));
       if (mounted) Navigator.of(context).pop();
-    } else {
-      _showResultSnackBar(status.message ?? 'An error occurred.',
-          success: false);
     }
-  }
-
-  void _showResultSnackBar(String message, {required bool success}) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Row(
-          children: [
-            Icon(success ? Icons.check_circle : Icons.error_outline,
-                color: Colors.white),
-            const SizedBox(width: 10),
-            Expanded(child: Text(message)),
-          ],
-        ),
-        backgroundColor: success ? Colors.teal.shade700 : Colors.red.shade700,
-        duration: const Duration(seconds: 3),
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      ),
-    );
   }
 
   // ─── Build ───────────────────────────────────────────────────────────────
@@ -118,9 +100,8 @@ class _ActionScreenState extends ConsumerState<ActionScreen>
   Widget build(BuildContext context) {
     final actionState = ref.watch(attendanceNotifierProvider);
     final isRecording = actionState.status == AttendanceActionStatus.loading;
-
-    // Smart suggestion: if last action was IN, suggest OUT, and vice versa
-    final suggestedType = _lastAction == 'IN' ? 'OUT' : 'IN';
+    final isSuccess = actionState.status == AttendanceActionStatus.success;
+    final isError = actionState.status == AttendanceActionStatus.error;
 
     return Scaffold(
       backgroundColor: const Color(0xFF0D1117),
@@ -133,46 +114,22 @@ class _ActionScreenState extends ConsumerState<ActionScreen>
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
                     const SizedBox(height: 32),
-
-                    // ── Back button ──────────────────────────────────────
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: IconButton(
-                        icon: const Icon(Icons.arrow_back_ios_new,
-                            color: Colors.white70),
-                        onPressed: () => Navigator.of(context).pop(),
+                    
+                    if (!isRecording && !isSuccess && !isError)
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: IconButton(
+                          icon: const Icon(Icons.arrow_back_ios_new, color: Colors.white70),
+                          onPressed: () => Navigator.of(context).pop(),
+                        ),
                       ),
-                    ),
 
                     const SizedBox(height: 12),
 
-                    // ── Avatar ───────────────────────────────────────────
-                    ScaleTransition(
-                      scale: _pulseAnimation,
-                      child: Container(
-                        width: 110,
-                        height: 110,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          gradient: const LinearGradient(
-                            colors: [Colors.teal, Colors.tealAccent],
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                          ),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.tealAccent.withAlpha(100),
-                              blurRadius: 24,
-                              spreadRadius: 4,
-                            )
-                          ],
-                        ),
-                        child: const Icon(Icons.person,
-                            size: 60, color: Colors.white),
-                      ),
-                    ),
+                    // ── Status Icon / Avatar ────────────────────────────
+                    _buildStatusIndicator(isRecording, isSuccess, isError),
 
-                    const SizedBox(height: 24),
+                    const SizedBox(height: 32),
 
                     // ── Employee Name ─────────────────────────────────────
                     Text(
@@ -181,7 +138,6 @@ class _ActionScreenState extends ConsumerState<ActionScreen>
                         fontSize: 28,
                         fontWeight: FontWeight.bold,
                         color: Colors.white,
-                        letterSpacing: 0.4,
                       ),
                       textAlign: TextAlign.center,
                     ),
@@ -190,238 +146,134 @@ class _ActionScreenState extends ConsumerState<ActionScreen>
 
                     // ── Employee Brief Profile ───────────────────────────
                     Text(
-                      '${widget.employee.position}  •  ${widget.employee.empId}',
+                      '${widget.employee.position}  •  ${widget.employee.department}',
                       style: const TextStyle(color: Colors.tealAccent, fontSize: 13, fontWeight: FontWeight.w600),
                       textAlign: TextAlign.center,
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      '${widget.employee.age} years old  •  ${widget.employee.sex}',
+                      'Employee ID: ${widget.employee.empId}',
                       style: const TextStyle(color: Colors.white38, fontSize: 12),
                       textAlign: TextAlign.center,
                     ),
 
-                    const SizedBox(height: 20),
+                    const SizedBox(height: 48),
 
-                    // ── Status badge ──────────────────────────────────────
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: Colors.tealAccent.withAlpha(26),
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: Colors.tealAccent.withAlpha(80)),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
+                    // ── Action Message ────────────────────────────────────
+                    if (isRecording)
+                      const _StatusText(text: 'SECURELY RECORDING LOG...', color: Colors.white38)
+                    else if (isSuccess)
+                      Column(
                         children: [
-                          const Icon(Icons.verified_user, color: Colors.tealAccent, size: 14),
-                          const SizedBox(width: 6),
-                          Text(
-                            'Identity Verified',
-                            style: TextStyle(color: Colors.tealAccent.shade200, fontSize: 13, fontWeight: FontWeight.w500),
+                          const _StatusText(text: 'SUCCESSFULLY RECORDED', color: Colors.tealAccent),
+                          const SizedBox(height: 24),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                            decoration: BoxDecoration(
+                              color: Colors.teal.withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(color: Colors.teal.withOpacity(0.3)),
+                            ),
+                            child: Text(
+                              'LOG TYPE: ${_lastAction == 'IN' ? 'TIME OUT' : 'TIME IN'}',
+                              style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold, letterSpacing: 1),
+                            ),
                           ),
                         ],
-                      ),
-                    ),
-
-                    const SizedBox(height: 12),
-
-                    // ── Current Time ──────────────────────────────────────
-                    _LiveClock(),
-
-                    const SizedBox(height: 16),
-
-                    // ── "View My History" Personal Button ─────────────────
-                    OutlinedButton.icon(
-                      icon: const Icon(Icons.history_rounded, size: 18),
-                      label: const Text('View My History'),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: Colors.white60,
-                        side: const BorderSide(color: Colors.white12),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                      ),
-                      onPressed: () => Navigator.pushNamed(
-                        context, 
-                        '/user_history', 
-                        arguments: widget.employee
-                      ),
-                    ),
-
-                    const SizedBox(height: 12),
-
-                    // ── Last action hint ──────────────────────────────────
-                    if (_lastAction != null)
-                      Text(
-                        'Last recorded: Time $_lastAction  •  Suggested: Time $suggestedType',
-                        style: const TextStyle(color: Colors.white38, fontSize: 13),
-                        textAlign: TextAlign.center,
-                      ),
+                      )
+                    else if (isError)
+                      _StatusText(text: actionState.message ?? 'ERROR RECORDING LOG', color: Colors.redAccent),
 
                     const Spacer(),
-
-                    // ── Time In / Time Out Buttons ────────────────────────
-                    _AttendanceButton(
-                      label: 'Time IN',
-                      icon: Icons.login_rounded,
-                      color: Colors.teal,
-                      isSuggested: suggestedType == 'IN',
-                      isLoading: isRecording,
-                      onTap: isRecording ? null : () => _record('IN'),
-                    ),
-
-                    const SizedBox(height: 16),
-
-                    _AttendanceButton(
-                      label: 'Time OUT',
-                      icon: Icons.logout_rounded,
-                      color: const Color(0xFFE05E5E),
-                      isSuggested: suggestedType == 'OUT',
-                      isLoading: isRecording,
-                      onTap: isRecording ? null : () => _record('OUT'),
-                    ),
-
-                    const SizedBox(height: 40),
+                    
+                    if (isSuccess)
+                      const Padding(
+                        padding: EdgeInsets.only(bottom: 40),
+                        child: Text(
+                          'Returning to home screen...',
+                          style: TextStyle(color: Colors.white10, fontSize: 12),
+                        ),
+                      ),
                   ],
                 ),
               ),
       ),
     );
   }
-}
 
-// ─── Live Clock Widget ───────────────────────────────────────────────────────
+  Widget _buildStatusIndicator(bool loading, bool success, bool error) {
+    if (loading) {
+      return Container(
+        padding: const EdgeInsets.all(40),
+        child: const CircularProgressIndicator(color: Colors.teal, strokeWidth: 3),
+      );
+    }
 
-class _LiveClock extends StatefulWidget {
-  @override
-  State<_LiveClock> createState() => _LiveClockState();
-}
+    if (success) {
+      return ScaleTransition(
+        scale: _pulseAnimation,
+        child: Container(
+          width: 120,
+          height: 120,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: Colors.teal.withOpacity(0.1),
+            border: Border.all(color: Colors.tealAccent, width: 2),
+            boxShadow: [
+              BoxShadow(color: Colors.tealAccent.withOpacity(0.2), blurRadius: 20, spreadRadius: 5),
+            ],
+          ),
+          child: const Icon(Icons.check_circle_rounded, size: 80, color: Colors.tealAccent),
+        ),
+      );
+    }
 
-class _LiveClockState extends State<_LiveClock> {
-  late String _time;
+    if (error) {
+      return Container(
+        width: 120,
+        height: 120,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: Colors.red.withOpacity(0.1),
+          border: Border.all(color: Colors.redAccent, width: 2),
+        ),
+        child: const Icon(Icons.error_outline_rounded, size: 80, color: Colors.redAccent),
+      );
+    }
 
-  @override
-  void initState() {
-    super.initState();
-    _updateTime();
-    // refresh every second
-    Future.doWhile(() async {
-      await Future.delayed(const Duration(seconds: 1));
-      if (!mounted) return false;
-      setState(_updateTime);
-      return true;
-    });
-  }
-
-  void _updateTime() {
-    _time = DateFormat('hh:mm:ss a').format(DateTime.now());
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Text(
-      _time,
-      style: const TextStyle(
-        fontSize: 20,
-        color: Colors.white54,
-        fontWeight: FontWeight.w300,
-        letterSpacing: 2,
+    return ScaleTransition(
+      scale: _pulseAnimation,
+      child: Container(
+        width: 110,
+        height: 110,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          gradient: const LinearGradient(
+            colors: [Colors.teal, Colors.tealAccent],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          boxShadow: [
+            BoxShadow(color: Colors.tealAccent.withAlpha(100), blurRadius: 24, spreadRadius: 4)
+          ],
+        ),
+        child: const Icon(Icons.person, size: 60, color: Colors.white),
       ),
     );
   }
 }
 
-// ─── Attendance Button ────────────────────────────────────────────────────────
-
-class _AttendanceButton extends StatelessWidget {
-  final String label;
-  final IconData icon;
+class _StatusText extends StatelessWidget {
+  final String text;
   final Color color;
-  final bool isSuggested;
-  final bool isLoading;
-  final VoidCallback? onTap;
-
-  const _AttendanceButton({
-    required this.label,
-    required this.icon,
-    required this.color,
-    required this.isSuggested,
-    required this.isLoading,
-    required this.onTap,
-  });
+  const _StatusText({required this.text, required this.color});
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 300),
-      width: double.infinity,
-      height: 70,
-      decoration: BoxDecoration(
-        gradient: isSuggested
-            ? LinearGradient(
-                colors: [color, color.withAlpha(200)],
-                begin: Alignment.centerLeft,
-                end: Alignment.centerRight,
-              )
-            : null,
-        color: isSuggested ? null : Colors.white10,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(
-          color: isSuggested ? color : Colors.white12,
-          width: isSuggested ? 1.5 : 1,
-        ),
-        boxShadow: isSuggested
-            ? [
-                BoxShadow(
-                    color: color.withAlpha(80),
-                    blurRadius: 18,
-                    spreadRadius: 1)
-              ]
-            : [],
-      ),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(18),
-          onTap: onTap,
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              if (isLoading)
-                const SizedBox(
-                  width: 22,
-                  height: 22,
-                  child:
-                      CircularProgressIndicator(color: Colors.white, strokeWidth: 2.5),
-                )
-              else
-                Icon(icon, color: Colors.white, size: 26),
-              const SizedBox(width: 14),
-              Text(
-                label,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 20,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 0.5,
-                ),
-              ),
-              if (isSuggested) ...[
-                const SizedBox(width: 8),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: Colors.white24,
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: const Text('Suggested',
-                      style: TextStyle(color: Colors.white, fontSize: 11)),
-                ),
-              ],
-            ],
-          ),
-        ),
-      ),
+    return Text(
+      text,
+      style: TextStyle(color: color, fontSize: 14, fontWeight: FontWeight.bold, letterSpacing: 2),
+      textAlign: TextAlign.center,
     );
   }
 }

@@ -4,9 +4,12 @@ class Employee {
   final int age;
   final String sex;
   final String position;
+  final String department;
   final String empId; // Auto-generated ID (e.g. EMP-001)
   final bool isAdmin;
   final List<double> facialEmbedding;
+  final String? username; // For admin login
+  final String? password; // For admin login
 
   Employee({
     this.id,
@@ -14,9 +17,12 @@ class Employee {
     required this.age,
     required this.sex,
     required this.position,
+    required this.department,
     required this.empId,
     this.isAdmin = false,
     required this.facialEmbedding,
+    this.username,
+    this.password,
   });
 
   Map<String, dynamic> toMap() {
@@ -25,9 +31,12 @@ class Employee {
       'age': age,
       'sex': sex,
       'position': position,
+      'department': department,
       'emp_id': empId,
       'is_admin': isAdmin ? 1 : 0,
       'facial_embedding': facialEmbedding.join(','),
+      'username': username,
+      'password': password,
     };
     if (id != null) map['id'] = id;
     return map;
@@ -40,8 +49,11 @@ class Employee {
       age: map['age'] as int? ?? 0,
       sex: map['sex'] as String? ?? 'Other',
       position: map['position'] as String? ?? 'Staff',
+      department: map['department'] as String? ?? 'General',
       empId: map['emp_id'] as String? ?? 'EMP-XXX',
       isAdmin: (map['is_admin'] as int? ?? 0) == 1,
+      username: map['username'] as String?,
+      password: map['password'] as String?,
       facialEmbedding: (map['facial_embedding'] as String)
           .split(',')
           .map((e) => double.parse(e))

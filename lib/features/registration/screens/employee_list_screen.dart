@@ -3,9 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/database/database_service.dart';
 import '../../../core/models/employee.dart';
 
-final employeesProvider = FutureProvider.autoDispose<List<Employee>>((ref) async {
-  return await DatabaseService.instance.getAllEmployees();
-});
+import '../providers/employee_provider.dart';
 
 class EmployeeListScreen extends ConsumerWidget {
   const EmployeeListScreen({super.key});

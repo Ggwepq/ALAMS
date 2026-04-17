@@ -14,7 +14,8 @@ import '../services/face_recognition_service.dart';
 import '../services/liveness_service.dart';
 
 class CameraScreen extends ConsumerStatefulWidget {
-  const CameraScreen({super.key});
+  final String mode; // 'IN', 'OUT', or 'SCAN' (default)
+  const CameraScreen({super.key, this.mode = 'SCAN'});
 
   @override
   ConsumerState<CameraScreen> createState() => _CameraScreenState();
@@ -222,7 +223,11 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
             }
           } else {
             // USER MODE: Standard check-in
-            await Navigator.of(context).pushNamed('/action', arguments: recognizedEmployee);
+            final actionToPass = widget.mode == 'SCAN' ? null : widget.mode;
+            await Navigator.of(context).pushNamed('/action', arguments: {
+              'employee': recognizedEmployee,
+              'action': actionToPass,
+            });
           }
           
           // RESTART stream when coming back

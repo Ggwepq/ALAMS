@@ -55,14 +55,14 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
-        title: const Text('Attendance Reports', 
+        title: const Text('Attendance Logs', 
             style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
         iconTheme: const IconThemeData(color: Colors.white),
         actions: [
           IconButton(
-            onPressed: () => Navigator.of(context).pushNamed('/employees'),
-            icon: const Icon(Icons.manage_accounts_rounded, color: Colors.tealAccent),
-            tooltip: 'Manage Registered Persons',
+            onPressed: () => Navigator.of(context).pushNamed('/employee_list'),
+            icon: const Icon(Icons.people_outline, color: Colors.tealAccent),
+            tooltip: 'View All Employee',
           ),
           const SizedBox(width: 8),
         ],
@@ -88,18 +88,18 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
                       children: [
                         Expanded(
                           child: _MetricCard(
-                            title: 'Present Today',
+                            title: 'At Work Now',
                             value: _totalPresentToday.toString(),
-                            icon: Icons.people_alt,
+                            icon: Icons.work_outline,
                             color: Colors.tealAccent,
                           ),
                         ),
                         const SizedBox(width: 16),
                         Expanded(
                           child: _MetricCard(
-                            title: 'Registered',
+                            title: 'People Registered',
                             value: _totalEmployees.toString(),
-                            icon: Icons.badge,
+                            icon: Icons.badge_outlined,
                             color: Colors.orangeAccent,
                           ),
                         ),
@@ -309,52 +309,65 @@ class _LogTile extends StatelessWidget {
     final actionColor = isIn ? Colors.tealAccent : const Color(0xFFE05E5E);
     final icon = isIn ? Icons.login : Icons.logout;
 
-    final name = logMap['employee_name'] as String? ?? 'Deleted Employee';
+    final name = logMap['employee_name'] as String? ?? 'Unknown';
+    final empId = logMap['employee_code'] as String? ?? 'N/A';
 
     return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(16),
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
-        color: Colors.white.withAlpha(12),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withAlpha(20)),
+        color: Colors.white.withAlpha(10),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white.withAlpha(15)),
       ),
       child: Row(
         children: [
+          // Action Type Column
           Container(
-            padding: const EdgeInsets.all(10),
+            width: 44,
+            height: 44,
             decoration: BoxDecoration(
-              color: actionColor.withAlpha(30),
-              shape: BoxShape.circle,
+              color: actionColor.withAlpha(20),
+              borderRadius: BorderRadius.circular(10),
             ),
-            child: Icon(icon, color: actionColor, size: 20),
+            child: Icon(icon, color: actionColor, size: 18),
           ),
           const SizedBox(width: 16),
+          // Employee Details
           Expanded(
+            flex: 3,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
                   name,
-                  style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                  style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
+                  overflow: TextOverflow.ellipsis,
                 ),
-                const SizedBox(height: 4),
                 Text(
-                  '$dateStr at $timeStr',
-                  style: const TextStyle(color: Colors.white54, fontSize: 13),
+                  'ID: $empId',
+                  style: const TextStyle(color: Colors.white38, fontSize: 12),
                 ),
               ],
             ),
           ),
-          Text(
-            type,
-            style: TextStyle(
-              color: actionColor,
-              fontWeight: FontWeight.bold,
-              fontSize: 16,
-              letterSpacing: 1,
+          // Time Details
+          Expanded(
+            flex: 2,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(
+                  timeStr,
+                  style: const TextStyle(color: Colors.tealAccent, fontSize: 14, fontWeight: FontWeight.bold),
+                ),
+                Text(
+                  dateStr,
+                  style: const TextStyle(color: Colors.white38, fontSize: 11),
+                ),
+              ],
             ),
-          )
+          ),
         ],
       ),
     );

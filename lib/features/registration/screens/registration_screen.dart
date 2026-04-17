@@ -34,8 +34,13 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
   final _nameController = TextEditingController();
   final _ageController = TextEditingController();
   final _positionController = TextEditingController();
+  final _usernameController = TextEditingController();
+  final _passwordController = TextEditingController();
   String _selectedSex = 'Male';
+  String _selectedDepartment = 'General';
+  List<String> _departments = ['General'];
   final _formKey = GlobalKey<FormState>();
+  bool _isFirstAdmin = false;
 
   // ── Camera & Recognition
   CameraController? _cameraController;
@@ -62,18 +67,41 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
   @override
   void initState() {
     super.initState();
-    if (widget.editEmployee != null) {
-      _nameController.text = widget.editEmployee!.name;
-      _ageController.text = widget.editEmployee!.age.toString();
-      _positionController.text = widget.editEmployee!.position;
-      _selectedSex = widget.editEmployee!.sex;
+    _loadInitialData();
+  }
+
+  Future<void> _loadInitialData() async {
+    final db = DatabaseService.instance;
+    final depts = await db.getAllDepartments();
+    final count = await db.getEmployeeCount();
+    
+    if (mounted) {
+      setState(() {
+        _departments = depts.map((d) => d.name).toList();
+        _isFirstAdmin = count == 0;
+        
+        if (widget.editEmployee != null) {
+          _nameController.text = widget.editEmployee!.name;
+          _ageController.text = widget.editEmployee!.age.toString();
+          _positionController.text = widget.editEmployee!.position;
+          _selectedSex = widget.editEmployee!.sex;
+          _selectedDepartment = widget.editEmployee!.department;
+          _usernameController.text = widget.editEmployee!.username ?? '';
+          _passwordController.text = widget.editEmployee!.password ?? '';
+        } else if (_departments.isNotEmpty) {
+          _selectedDepartment = _departments.first;
+        }
+      });
     }
   }
+
   @override
   void dispose() {
     _nameController.dispose();
     _ageController.dispose();
     _positionController.dispose();
+    _usernameController.dispose();
+    _passwordController.dispose();
     _cameraController?.dispose();
     _faceDetector.close();
     super.dispose();
@@ -226,9 +254,12 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
           age: age,
           sex: _selectedSex,
           position: position,
-          empId: widget.editEmployee!.empId, // Keep original ID
-          isAdmin: widget.editEmployee!.isAdmin, // Keep original rights
+          department: _selectedDepartment,
+          empId: widget.editEmployee!.empId,
+          isAdmin: widget.editEmployee!.isAdmin,
           facialEmbedding: avgEmbedding,
+          username: widget.editEmployee!.isAdmin ? _usernameController.text : null,
+          password: widget.editEmployee!.isAdmin ? _passwordController.text : null,
         );
         await db.updateEmployee(updated);
         
@@ -250,9 +281,12 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
             age: age,
             sex: _selectedSex,
             position: position,
+            department: _selectedDepartment,
             empId: newIdNumber,
             isAdmin: isAdmin,
             facialEmbedding: avgEmbedding,
+            username: isAdmin ? _usernameController.text.trim() : null,
+            password: isAdmin ? _passwordController.text.trim() : null,
           ),
         );
 
@@ -362,6 +396,44 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
               decoration: _buildInputDecoration('e.g. Software Engineer', Icons.work),
               validator: (v) => (v == null || v.trim().isEmpty) ? 'Position is required' : null,
             ),
+            const SizedBox(height: 20),
+
+            // Department
+            _buildFieldLabel('Department'),
+            DropdownButtonFormField<String>(
+              value: _selectedDepartment,
+              dropdownColor: const Color(0xFF161B22),
+              style: const TextStyle(color: Colors.white),
+              decoration: _buildInputDecoration('', Icons.business_rounded),
+              items: _departments
+                  .map((d) => DropdownMenuItem(value: d, child: Text(d)))
+                  .toList(),
+              onChanged: (v) => setState(() => _selectedDepartment = v!),
+              validator: (v) => (v == null || v.isEmpty) ? 'Required' : null,
+            ),
+
+            if (_isFirstAdmin || (widget.editEmployee?.isAdmin ?? false)) ...[
+              const SizedBox(height: 32),
+              const Text('Admin Security Credentials',
+                  style: TextStyle(color: Colors.tealAccent, fontSize: 18, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 16),
+              _buildFieldLabel('Admin Username'),
+              TextFormField(
+                controller: _usernameController,
+                style: const TextStyle(color: Colors.white),
+                decoration: _buildInputDecoration('Username', Icons.admin_panel_settings),
+                validator: (v) => (v == null || v.trim().isEmpty) ? 'Username is required' : null,
+              ),
+              const SizedBox(height: 16),
+              _buildFieldLabel('Admin Password'),
+              TextFormField(
+                controller: _passwordController,
+                obscureText: true,
+                style: const TextStyle(color: Colors.white),
+                decoration: _buildInputDecoration('Password', Icons.lock),
+                validator: (v) => (v == null || v.trim().length < 4) ? 'Password must be 4+ characters' : null,
+              ),
+            ],
 
             const SizedBox(height: 48),
             
@@ -507,13 +579,20 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
             SizedBox(
               width: 200,
               child: ElevatedButton(
-                onPressed: () => Navigator.of(context).pop(),
+                onPressed: () {
+                  if (isSuccess && widget.editEmployee == null) {
+                    // Reset stack to trigger RootGuardian re-check for the new admin
+                    Navigator.of(context).pushNamedAndRemoveUntil('/', (route) => false);
+                  } else {
+                    Navigator.of(context).pop();
+                  }
+                },
                 style: ElevatedButton.styleFrom(
                   backgroundColor: isSuccess ? Colors.teal : Colors.white12,
                   foregroundColor: Colors.white,
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                 ),
-                child: Text(isSuccess ? 'Done' : 'Go Back', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                child: Text(isSuccess ? 'Continue' : 'Go Back', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
               ),
             ),
           ],
