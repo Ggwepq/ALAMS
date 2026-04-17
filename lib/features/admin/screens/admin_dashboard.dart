@@ -179,9 +179,8 @@ class AdminDashboard extends ConsumerWidget {
         InkWell(
           onTap: () async {
             final db = DatabaseService.instance;
-            final employees = await db.getAllEmployees();
-            final admin = employees.firstWhere((e) => e.isAdmin);
-            if (context.mounted) {
+            final admin = await db.getAdmin();
+            if (context.mounted && admin != null) {
               Navigator.pushNamed(context, '/register', arguments: admin);
             }
           },

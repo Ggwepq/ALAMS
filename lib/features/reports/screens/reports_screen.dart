@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
-import '../../../core/database/database_service.dart';
 import '../../attendance/providers/attendance_provider.dart';
 
 class ReportsScreen extends ConsumerStatefulWidget {
@@ -13,42 +12,18 @@ class ReportsScreen extends ConsumerStatefulWidget {
 }
 
 class _ReportsScreenState extends ConsumerState<ReportsScreen> {
-  int _totalPresentToday = 0;
-  int _totalEmployees = 0;
-
   // Filters
   String _searchQuery = '';
   String _typeFilter = 'All'; // 'All', 'IN', 'OUT'
   DateTime? _dateFilter; // null means Today
 
   @override
-  void initState() {
-    super.initState();
-    _calculateMetrics();
-  }
-
-  Future<void> _calculateMetrics() async {
-    final db = DatabaseService.instance;
-    final logsToday = await db.getAttendanceLogsWithNamesToday();
-    final allEmployees = await db.getAllEmployees();
-    
-    // Total distinct employees who timed IN today
-    final presentEmpIds = logsToday
-        .where((l) => l['type'] == 'IN')
-        .map((l) => l['employee_id'])
-        .toSet();
-
-    if (mounted) {
-      setState(() {
-        _totalPresentToday = presentEmpIds.length;
-        _totalEmployees = allEmployees.length;
-      });
-    }
-  }
-
-  @override
   Widget build(BuildContext context) {
     final logsAsync = ref.watch(attendanceLogsWithNamesProvider);
+    
+    // Watch providers for consistent metrics
+    final workingCount = ref.watch(currentlyWorkingProvider).when(data: (d) => d.length, loading: () => 0, error: (_, __) => 0);
+    final absentCount = ref.watch(absentTodayProvider).when(data: (d) => d.length, loading: () => 0, error: (_, __) => 0);
 
     return Scaffold(
       backgroundColor: const Color(0xFF0D1117),
@@ -72,7 +47,8 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
         backgroundColor: Colors.black87,
         onRefresh: () async {
           ref.invalidate(attendanceLogsWithNamesProvider);
-          await _calculateMetrics();
+          ref.invalidate(currentlyWorkingProvider);
+          ref.invalidate(absentTodayProvider);
         },
         child: CustomScrollView(
           physics: const AlwaysScrollableScrollPhysics(),
@@ -89,18 +65,18 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
                         Expanded(
                           child: _MetricCard(
                             title: 'At Work Now',
-                            value: _totalPresentToday.toString(),
-                            icon: Icons.work_outline,
+                            value: workingCount.toString(),
+                            icon: Icons.check_circle_rounded,
                             color: Colors.tealAccent,
                           ),
                         ),
                         const SizedBox(width: 16),
                         Expanded(
                           child: _MetricCard(
-                            title: 'People Registered',
-                            value: _totalEmployees.toString(),
-                            icon: Icons.badge_outlined,
-                            color: Colors.orangeAccent,
+                            title: 'Absent Today',
+                            value: absentCount.toString(),
+                            icon: Icons.cancel_rounded,
+                            color: const Color(0xFFE05E5E),
                           ),
                         ),
                       ],

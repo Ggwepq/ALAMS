@@ -107,9 +107,19 @@ class DatabaseService {
 
   Future<List<Employee>> getAllEmployees() async {
     final db = await instance.database;
+    // Potentially fix NULL values from old migrations
+    await db.execute('UPDATE employees SET is_admin = 0 WHERE is_admin IS NULL');
+    
     // Exclude admins from general lists
-    final result = await db.query('employees', where: 'is_admin = 0');
+    final result = await db.query('employees', where: 'is_admin != 1');
     return result.map((json) => Employee.fromMap(json)).toList();
+  }
+
+  Future<Employee?> getAdmin() async {
+    final db = await instance.database;
+    final result = await db.query('employees', where: 'is_admin = 1', limit: 1);
+    if (result.isEmpty) return null;
+    return Employee.fromMap(result.first);
   }
 
   Future<int> deleteEmployee(int id) async {
