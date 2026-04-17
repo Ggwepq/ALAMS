@@ -57,48 +57,51 @@ class _EmployeeTile extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white.withAlpha(12),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withAlpha(20)),
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Colors.tealAccent.withAlpha(30),
-              shape: BoxShape.circle,
+    return InkWell(
+      onTap: () => Navigator.pushNamed(context, '/user_history', arguments: employee),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.white.withAlpha(12),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.white.withAlpha(20)),
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.tealAccent.withAlpha(30),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.person, color: Colors.tealAccent, size: 24),
             ),
-            child: const Icon(Icons.person, color: Colors.tealAccent, size: 24),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  employee.name,
-                  style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold),
-                ),
-                Text(
-                  'ID: ${employee.id}',
-                  style: const TextStyle(color: Colors.white54, fontSize: 13),
-                ),
-              ],
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    employee.name,
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold),
+                  ),
+                  Text(
+                    '${employee.position} • ${employee.empId}',
+                    style: const TextStyle(color: Colors.white54, fontSize: 13),
+                  ),
+                ],
+              ),
             ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.delete_outline, color: Color(0xFFE05E5E)),
-            onPressed: () => _confirmDelete(context, ref),
-          ),
-        ],
+            IconButton(
+              icon: const Icon(Icons.delete_outline, color: Color(0xFFE05E5E)),
+              onPressed: () => _confirmDelete(context, ref),
+            ),
+          ],
+        ),
       ),
     );
   }

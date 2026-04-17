@@ -25,15 +25,14 @@ class LivenessService {
   LivenessState _state = LivenessState.waiting;
   int _blinkCount = 0;
   bool _eyeWasClosed = false;
-
-  // Thresholds
-  static const double _eyeOpenThreshold = 0.7;   // above this = open
-  static const double _eyeClosedThreshold = 0.3; // below this = closed
+  int _closedFrames = 0;
+  static const int _minClosedFrames = 1;
 
   LivenessState get state => _state;
 
-  int _closedFrames = 0;
-  static const int _minClosedFrames = 2; // Reduced from 3 to be more responsive but still secure
+  // Thresholds: Higher means easier to count as 'open', lower means easier to count as 'closed'
+  double _eyeClosedThreshold = 0.35; // Lower = must be more closed
+  double _eyeOpenThreshold = 0.65;   // Higher = must be more open
 
   /// Process a single [InputImage] frame. Returns updated [LivenessState].
   Future<LivenessState> processFrame(InputImage inputImage) async {

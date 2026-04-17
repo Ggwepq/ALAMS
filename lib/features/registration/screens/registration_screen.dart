@@ -29,8 +29,11 @@ class RegistrationScreen extends ConsumerStatefulWidget {
 }
 
 class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
-  // ── Name entry
+  // ── Profile data
   final _nameController = TextEditingController();
+  final _ageController = TextEditingController();
+  final _positionController = TextEditingController();
+  String _selectedSex = 'Male';
   final _formKey = GlobalKey<FormState>();
 
   // ── Camera & Recognition
@@ -58,6 +61,8 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
   @override
   void dispose() {
     _nameController.dispose();
+    _ageController.dispose();
+    _positionController.dispose();
     _cameraController?.dispose();
     _faceDetector.close();
     super.dispose();
@@ -196,17 +201,38 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
     setState(() => _step = RegistrationStep.processing);
 
     try {
+      final db = DatabaseService.instance;
+      final count = await db.getEmployeeCount();
+      
+      // Auto-generate ID: EMP-001, EMP-002...
+      final newIdNumber = 'EMP-${(count + 1).toString().padLeft(3, '0')}';
+      
+      // The first person registered in the system is automatically the Admin
+      final bool isAdmin = count == 0;
+
       final avgEmbedding = _averageEmbeddings(_capturedEmbeddings);
       final name = _nameController.text.trim();
+      final age = int.tryParse(_ageController.text.trim()) ?? 0;
+      final position = _positionController.text.trim();
 
-      await DatabaseService.instance.insertEmployee(
-        Employee(name: name, facialEmbedding: avgEmbedding),
+      await db.insertEmployee(
+        Employee(
+          name: name,
+          age: age,
+          sex: _selectedSex,
+          position: position,
+          empId: newIdNumber,
+          isAdmin: isAdmin,
+          facialEmbedding: avgEmbedding,
+        ),
       );
 
       if (mounted) {
         setState(() {
           _step = RegistrationStep.success;
-          _statusMessage = '$name has been registered!';
+          _statusMessage = isAdmin 
+              ? '$name registered as SYSTEM ADMIN!' 
+              : '$name has been registered! ID: $newIdNumber';
         });
       }
     } catch (e) {
@@ -233,36 +259,82 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
   // ─── Step 1: Name Entry Screen ────────────────────────────────────────────
 
   Widget _buildNameEntry() {
-    return Padding(
+    return SingleChildScrollView(
       padding: const EdgeInsets.all(28),
       child: Form(
         key: _formKey,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const SizedBox(height: 16),
-            const Text('Full Name',
-                style: TextStyle(color: Colors.white70, fontSize: 14, fontWeight: FontWeight.w500)),
-            const SizedBox(height: 10),
+            const Text('Personal Information',
+                style: TextStyle(color: Colors.tealAccent, fontSize: 18, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 24),
+            
+            // Name
+            _buildFieldLabel('Full Name'),
             TextFormField(
               controller: _nameController,
               style: const TextStyle(color: Colors.white),
-              decoration: InputDecoration(
-                hintText: 'e.g. Juan Dela Cruz',
-                hintStyle: const TextStyle(color: Colors.white38),
-                filled: true,
-                fillColor: Colors.white10,
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none),
-                focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: Colors.tealAccent, width: 1.5)),
-                prefixIcon: const Icon(Icons.person, color: Colors.white38),
-              ),
-              validator: (v) {
-                if (v == null || v.trim().isEmpty) return 'Name is required';
-                if (v.trim().length < 2) return 'Name is too short';
-                return null;
-              },
+              decoration: _buildInputDecoration('e.g. Juan Dela Cruz', Icons.person),
+              validator: (v) => (v == null || v.trim().isEmpty) ? 'Name is required' : null,
             ),
-            const Spacer(),
+            const SizedBox(height: 20),
+
+            Row(
+              children: [
+                // Age
+                Expanded(
+                  flex: 2,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _buildFieldLabel('Age'),
+                      TextFormField(
+                        controller: _ageController,
+                        keyboardType: TextInputType.number,
+                        style: const TextStyle(color: Colors.white),
+                        decoration: _buildInputDecoration('00', Icons.cake),
+                        validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null,
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 16),
+                // Sex
+                Expanded(
+                  flex: 3,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _buildFieldLabel('Sex'),
+                      DropdownButtonFormField<String>(
+                        value: _selectedSex,
+                        dropdownColor: const Color(0xFF161B22),
+                        style: const TextStyle(color: Colors.white),
+                        decoration: _buildInputDecoration('', Icons.people),
+                        items: ['Male', 'Female', 'Other']
+                            .map((s) => DropdownMenuItem(value: s, child: Text(s)))
+                            .toList(),
+                        onChanged: (v) => setState(() => _selectedSex = v!),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+
+            // Position
+            _buildFieldLabel('Company Position'),
+            TextFormField(
+              controller: _positionController,
+              style: const TextStyle(color: Colors.white),
+              decoration: _buildInputDecoration('e.g. Software Engineer', Icons.work),
+              validator: (v) => (v == null || v.trim().isEmpty) ? 'Position is required' : null,
+            ),
+
+            const SizedBox(height: 48),
+            
             SizedBox(
               width: double.infinity,
               height: 58,
@@ -288,6 +360,27 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildFieldLabel(String label) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8.0),
+      child: Text(label,
+          style: const TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w500)),
+    );
+  }
+
+  InputDecoration _buildInputDecoration(String hint, IconData icon) {
+    return InputDecoration(
+      hintText: hint,
+      hintStyle: const TextStyle(color: Colors.white38),
+      filled: true,
+      fillColor: Colors.white10,
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none),
+      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: const BorderSide(color: Colors.tealAccent, width: 1.5)),
+      prefixIcon: Icon(icon, color: Colors.white38, size: 20),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
     );
   }
 

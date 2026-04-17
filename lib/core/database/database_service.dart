@@ -21,8 +21,17 @@ class DatabaseService {
 
     return await openDatabase(
       path,
-      version: 1,
+      version: 2, // Increased version for migration
       onCreate: _createDB,
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          await db.execute('ALTER TABLE employees ADD COLUMN age INTEGER DEFAULT 0');
+          await db.execute('ALTER TABLE employees ADD COLUMN sex TEXT DEFAULT "Other"');
+          await db.execute('ALTER TABLE employees ADD COLUMN position TEXT DEFAULT "Staff"');
+          await db.execute('ALTER TABLE employees ADD COLUMN emp_id TEXT DEFAULT "EMP-XXX"');
+          await db.execute('ALTER TABLE employees ADD COLUMN is_admin INTEGER DEFAULT 0');
+        }
+      },
     );
   }
 
@@ -31,6 +40,11 @@ class DatabaseService {
       CREATE TABLE employees (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
+        age INTEGER NOT NULL,
+        sex TEXT NOT NULL,
+        position TEXT NOT NULL,
+        emp_id TEXT NOT NULL,
+        is_admin INTEGER NOT NULL,
         facial_embedding TEXT NOT NULL
       )
     ''');
@@ -44,6 +58,12 @@ class DatabaseService {
         FOREIGN KEY (employee_id) REFERENCES employees (id)
       )
     ''');
+  }
+
+  Future<int> getEmployeeCount() async {
+    final db = await instance.database;
+    final result = await db.rawQuery('SELECT COUNT(*) FROM employees');
+    return Sqflite.firstIntValue(result) ?? 0;
   }
 
   // ─── Employees ─────────────────────────────────────────────────────────────
@@ -120,6 +140,24 @@ class DatabaseService {
       LEFT JOIN employees e ON a.employee_id = e.id
       ORDER BY a.timestamp DESC
     ''');
+    return result;
+  }
+
+  /// Returns all attendance logs for a specific employee.
+  Future<List<Map<String, dynamic>>> getAttendanceLogsForEmployee(int employeeId) async {
+    final db = await instance.database;
+    final result = await db.rawQuery('''
+      SELECT 
+        a.id, 
+        a.employee_id, 
+        a.timestamp, 
+        a.type, 
+        e.name AS employee_name
+      FROM attendance a
+      LEFT JOIN employees e ON a.employee_id = e.id
+      WHERE a.employee_id = ?
+      ORDER BY a.timestamp DESC
+    ''', [employeeId]);
     return result;
   }
 

@@ -8,10 +8,10 @@ import '../../face_recognition/providers/face_recognition_provider.dart';
 import '../providers/attendance_provider.dart';
 
 class ActionScreen extends ConsumerStatefulWidget {
-  /// The name of the recognized employee passed via route arguments.
-  final String employeeName;
+  /// The recognized employee passed via route arguments.
+  final Employee employee;
 
-  const ActionScreen({super.key, required this.employeeName});
+  const ActionScreen({super.key, required this.employee});
 
   @override
   ConsumerState<ActionScreen> createState() => _ActionScreenState();
@@ -41,14 +41,12 @@ class _ActionScreenState extends ConsumerState<ActionScreen>
 
   Future<void> _loadEmployeeData() async {
     final db = DatabaseService.instance;
-    final employees = await db.getAllEmployees();
-    final match = employees.where((e) => e.name == widget.employeeName).firstOrNull;
-
-    if (match != null) {
-      final lastAttendance = await db.getLastAttendanceForEmployee(match.id!);
+    _employee = widget.employee;
+    
+    if (_employee != null) {
+      final lastAttendance = await db.getLastAttendanceForEmployee(_employee!.id!);
       if (mounted) {
         setState(() {
-          _employee = match;
           _lastAction = lastAttendance?.type;
           _isLoading = false;
         });
@@ -178,9 +176,9 @@ class _ActionScreenState extends ConsumerState<ActionScreen>
 
                     // ── Employee Name ─────────────────────────────────────
                     Text(
-                      widget.employeeName,
+                      widget.employee.name,
                       style: const TextStyle(
-                        fontSize: 30,
+                        fontSize: 28,
                         fontWeight: FontWeight.bold,
                         color: Colors.white,
                         letterSpacing: 0.4,
@@ -188,39 +186,66 @@ class _ActionScreenState extends ConsumerState<ActionScreen>
                       textAlign: TextAlign.center,
                     ),
 
-                    const SizedBox(height: 6),
+                    const SizedBox(height: 8),
+
+                    // ── Employee Brief Profile ───────────────────────────
+                    Text(
+                      '${widget.employee.position}  •  ${widget.employee.empId}',
+                      style: const TextStyle(color: Colors.tealAccent, fontSize: 13, fontWeight: FontWeight.w600),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '${widget.employee.age} years old  •  ${widget.employee.sex}',
+                      style: const TextStyle(color: Colors.white38, fontSize: 12),
+                      textAlign: TextAlign.center,
+                    ),
+
+                    const SizedBox(height: 20),
 
                     // ── Status badge ──────────────────────────────────────
                     Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 14, vertical: 6),
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
                       decoration: BoxDecoration(
                         color: Colors.tealAccent.withAlpha(26),
                         borderRadius: BorderRadius.circular(20),
-                        border: Border.all(
-                            color: Colors.tealAccent.withAlpha(80)),
+                        border: Border.all(color: Colors.tealAccent.withAlpha(80)),
                       ),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          const Icon(Icons.verified_user,
-                              color: Colors.tealAccent, size: 14),
+                          const Icon(Icons.verified_user, color: Colors.tealAccent, size: 14),
                           const SizedBox(width: 6),
                           Text(
                             'Identity Verified',
-                            style: TextStyle(
-                                color: Colors.tealAccent.shade200,
-                                fontSize: 13,
-                                fontWeight: FontWeight.w500),
+                            style: TextStyle(color: Colors.tealAccent.shade200, fontSize: 13, fontWeight: FontWeight.w500),
                           ),
                         ],
                       ),
                     ),
 
-                    const SizedBox(height: 8),
+                    const SizedBox(height: 12),
 
                     // ── Current Time ──────────────────────────────────────
                     _LiveClock(),
+
+                    const SizedBox(height: 16),
+
+                    // ── "View My History" Personal Button ─────────────────
+                    OutlinedButton.icon(
+                      icon: const Icon(Icons.history_rounded, size: 18),
+                      label: const Text('View My History'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.white60,
+                        side: const BorderSide(color: Colors.white12),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                      onPressed: () => Navigator.pushNamed(
+                        context, 
+                        '/user_history', 
+                        arguments: widget.employee
+                      ),
+                    ),
 
                     const SizedBox(height: 12),
 
@@ -228,8 +253,7 @@ class _ActionScreenState extends ConsumerState<ActionScreen>
                     if (_lastAction != null)
                       Text(
                         'Last recorded: Time $_lastAction  •  Suggested: Time $suggestedType',
-                        style: const TextStyle(
-                            color: Colors.white38, fontSize: 13),
+                        style: const TextStyle(color: Colors.white38, fontSize: 13),
                         textAlign: TextAlign.center,
                       ),
 

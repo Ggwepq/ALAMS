@@ -2,11 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'features/admin/screens/admin_dashboard.dart';
+import 'features/attendance/screens/attendance_history_screen.dart';
 import 'features/attendance/screens/action_screen.dart';
 import 'features/face_recognition/screens/camera_screen.dart';
 import 'features/registration/screens/employee_list_screen.dart';
 import 'features/registration/screens/registration_screen.dart';
 import 'features/reports/screens/reports_screen.dart';
+import 'core/models/employee.dart';
 
 // Global route observer to detect when screens come into focus
 final RouteObserver<ModalRoute<void>> routeObserver = RouteObserver<ModalRoute<void>>();
@@ -62,10 +65,10 @@ class AlamsApp extends StatelessWidget {
             );
 
           case '/action':
-            final name = settings.arguments as String? ?? 'Unknown';
+            final employee = settings.arguments as Employee;
             return PageRouteBuilder(
               pageBuilder: (ctx, anim, secAnim) =>
-                  ActionScreen(employeeName: name),
+                  ActionScreen(employee: employee),
               transitionsBuilder: (ctx, anim, secAnim, child) {
                 return SlideTransition(
                   position: Tween<Offset>(
@@ -77,6 +80,17 @@ class AlamsApp extends StatelessWidget {
                 );
               },
               transitionDuration: const Duration(milliseconds: 350),
+            );
+
+          case '/admin_dash':
+            return MaterialPageRoute(
+              builder: (_) => const AdminDashboard(),
+            );
+
+          case '/user_history':
+            final employee = settings.arguments as Employee;
+            return MaterialPageRoute(
+              builder: (_) => AttendanceHistoryScreen(employee: employee),
             );
 
           case '/register':
@@ -111,7 +125,7 @@ class AlamsApp extends StatelessWidget {
               transitionDuration: const Duration(milliseconds: 350),
             );
 
-          case '/employees':
+          case '/employee_list':
             return PageRouteBuilder(
               pageBuilder: (ctx, anim, secAnim) => const EmployeeListScreen(),
               transitionsBuilder: (ctx, anim, secAnim, child) {

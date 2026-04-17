@@ -24,6 +24,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
   CameraController? _cameraController;
   bool _isCameraInitialized = false;
   bool _isProcessingFrame = false;
+  bool _isAdminMode = false;
   String? _cameraErrorMessage;
   DateTime _nextAvailableRecognition = DateTime.now();
 
@@ -57,8 +58,10 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
   @override
   void didPopNext() {
     // This is called when the top route was popped and this route is visible again
-    debugPrint('[Camera] Returned to screen. Re-initializing camera…');
-    _initCamera();
+    debugPrint('[Camera] Returned to screen. Re-initializing camera in 300ms…');
+    Future.delayed(const Duration(milliseconds: 300), () {
+      if (mounted) _initCamera();
+    });
   }
 
   // ─── Camera Setup ────────────────────────────────────────────────────────
@@ -188,14 +191,39 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
       livenessService.reset();
 
       if (result.isRecognized) {
-        ref.read(recognizedEmployeeProvider.notifier).set(result.label);
+        // Find the employee object from the recognized label (name)
+        final recognizedEmployee = employees.firstWhere(
+          (e) => e.name == result.label,
+          orElse: () => employees.first, // Should not happen if matched
+        );
+
+        ref.read(recognizedEmployeeProvider.notifier).set(recognizedEmployee.name);
         
         // Pause stream and set navigation cooldown
         await _cameraController?.stopImageStream();
         _nextAvailableRecognition = DateTime.now().add(const Duration(seconds: 5));
 
         if (mounted) {
-          await Navigator.of(context).pushNamed('/action', arguments: result.label);
+          if (_isAdminMode) {
+            // ADMIN MODE: Only let Admins through
+            if (recognizedEmployee.isAdmin) {
+              setState(() => _isAdminMode = false);
+              await Navigator.of(context).pushNamed('/admin_dash');
+            } else {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                    content: Text('Access Denied: Not an Admin'),
+                    backgroundColor: Colors.redAccent),
+              );
+              // Restart stream if denied
+              if (mounted && _cameraController != null) {
+                _cameraController!.startImageStream(_onCameraFrame);
+              }
+            }
+          } else {
+            // USER MODE: Standard check-in
+            await Navigator.of(context).pushNamed('/action', arguments: recognizedEmployee);
+          }
           
           // RESTART stream when coming back
           if (mounted && _cameraController != null) {
@@ -244,7 +272,6 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
 
   @override
   Widget build(BuildContext context) {
-    final modelAsync = ref.watch(modelLoadedProvider);
     final livenessState = ref.watch(livenessStateProvider);
 
     // 1. Error state (Permission denied or hardware failure)
@@ -334,29 +361,50 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
             ),
           ),
 
-          // ── Top Navigation Bar (Reports & Registration) ──────────
+          // ── Top Navigation Bar ────────────────────────────────────────
           Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
+            top: 0, left: 0, right: 0,
             child: SafeArea(
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                 child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    // Reports Button
-                    IconButton(
-                      icon: const Icon(Icons.bar_chart_rounded, color: Colors.white, size: 30),
-                      onPressed: () => Navigator.of(context).pushNamed('/reports'),
-                      tooltip: 'Attendance Reports',
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _isAdminMode ? 'ADMIN SCAN' : 'ATTENDANCE',
+                          style: TextStyle(
+                            color: _isAdminMode ? Colors.orangeAccent : Colors.tealAccent,
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 2,
+                          ),
+                        ),
+                        const Text(
+                          'ALAMS System',
+                          style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
+                        ),
+                      ],
                     ),
-                    // Add Employee Button
-                    IconButton(
-                      icon: const Icon(Icons.person_add_alt_1_rounded, color: Colors.white, size: 30),
-                      onPressed: () => Navigator.of(context).pushNamed('/register'),
-                      tooltip: 'Register New Employee',
-                    ),
+                    const Spacer(),
+                    if (!_isAdminMode)
+                      ElevatedButton.icon(
+                        icon: const Icon(Icons.admin_panel_settings, size: 18),
+                        label: const Text('Admin'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.white10,
+                          foregroundColor: Colors.white70,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                        ),
+                        onPressed: () => setState(() => _isAdminMode = true),
+                      )
+                    else
+                      IconButton.filledTonal(
+                        icon: const Icon(Icons.close),
+                        onPressed: () => setState(() => _isAdminMode = false),
+                      ),
                   ],
                 ),
               ),
@@ -371,36 +419,46 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
             child: _LivenessStatusBadge(state: livenessState),
           ),
 
-          // ── Model loading indicator ───────────────────────────────
-          if (modelAsync.isLoading)
-            Positioned(
-              top: 56,
-              left: 0,
-              right: 0,
-              child: Center(
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: Colors.black54,
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const SizedBox(
-                        width: 14,
-                        height: 14,
-                        child:
-                            CircularProgressIndicator(strokeWidth: 2, color: Colors.tealAccent),
+          // ── Bottom Logo & Hidden Admin Link ───────────────────────
+          Positioned(
+            bottom: 40,
+            left: 0,
+            right: 0,
+            child: Center(
+              child: GestureDetector(
+                onLongPress: () {
+                  if (!_isAdminMode) {
+                    Feedback.forLongPress(context);
+                    setState(() => _isAdminMode = true);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Admin Scanning Mode Active')),
+                    );
+                  }
+                },
+                child: Column(
+                  children: [
+                    Image.network(
+                      'https://cdn-icons-png.flaticon.com/512/2932/2932915.png', // Replace with local logo if available
+                      width: 40,
+                      height: 40,
+                      color: _isAdminMode ? Colors.orangeAccent : Colors.white24,
+                      errorBuilder: (ctx, e, st) => Icon(Icons.shield_outlined, color: _isAdminMode ? Colors.orangeAccent : Colors.white24),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      _isAdminMode ? 'VERIFY ADMIN FACE' : 'SCAN TO LOG ATTENDANCE',
+                      style: TextStyle(
+                        color: _isAdminMode ? Colors.orangeAccent : Colors.white38,
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 1,
                       ),
-                      const SizedBox(width: 8),
-                      const Text('Loading model…',
-                          style: TextStyle(color: Colors.white70, fontSize: 13)),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               ),
             ),
+          ),
         ],
       ),
     );
