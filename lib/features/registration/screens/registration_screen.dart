@@ -646,9 +646,14 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
               width: 200,
               child: ElevatedButton(
                 onPressed: () {
-                  if (isSuccess && widget.editEmployee == null) {
-                    // Reset stack to trigger RootGuardian re-check for the new admin
-                    Navigator.of(context).pushNamedAndRemoveUntil('/', (route) => false);
+                  if (isSuccess) {
+                    if (widget.editEmployee == null && _isFirstAdmin) {
+                      // Reset stack to trigger RootGuardian re-check for the new admin
+                      Navigator.of(context).pushNamedAndRemoveUntil('/', (route) => false);
+                    } else {
+                      // Return to dashboard or employee list
+                      Navigator.of(context).pop();
+                    }
                   } else {
                     Navigator.of(context).pop();
                   }

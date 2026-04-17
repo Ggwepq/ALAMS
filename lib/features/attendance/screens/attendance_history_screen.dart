@@ -41,6 +41,14 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
             style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
         backgroundColor: Colors.transparent,
         elevation: 0,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.info_outline_rounded, color: Colors.tealAccent),
+            tooltip: 'View Info',
+            onPressed: () => _showEmployeeInfo(context),
+          ),
+          const SizedBox(width: 8),
+        ],
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator(color: Colors.teal))
@@ -149,6 +157,97 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
           Icon(Icons.history_toggle_off, size: 64, color: Colors.white10),
           const SizedBox(height: 16),
           const Text('No attendance records yet', style: TextStyle(color: Colors.white24)),
+        ],
+      ),
+    );
+  }
+
+  void _showEmployeeInfo(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (ctx) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 32),
+        decoration: const BoxDecoration(
+          color: Color(0xFF161B22),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(color: Colors.white12, borderRadius: BorderRadius.circular(2)),
+              ),
+            ),
+            const SizedBox(height: 32),
+            Row(
+              children: [
+                const Icon(Icons.badge_outlined, color: Colors.tealAccent),
+                const SizedBox(width: 12),
+                Text(
+                  widget.employee.name,
+                  style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Employee ID: ${widget.employee.empId}',
+              style: const TextStyle(color: Colors.white38, fontSize: 13, fontWeight: FontWeight.w500),
+            ),
+            const SizedBox(height: 32),
+            
+            _buildDetailRow(Icons.business_rounded, 'Department', widget.employee.department),
+            _buildDetailRow(Icons.work_outline_rounded, 'Position', widget.employee.position),
+            _buildDetailRow(Icons.email_outlined, 'Email', widget.employee.email.isEmpty ? 'N/A' : widget.employee.email),
+            _buildDetailRow(Icons.cake_outlined, 'Age', '${widget.employee.age} years old'),
+            _buildDetailRow(Icons.people_outline_rounded, 'Sex', widget.employee.sex),
+            
+            const SizedBox(height: 40),
+            SizedBox(
+              width: double.infinity,
+              height: 56,
+              child: ElevatedButton.icon(
+                icon: const Icon(Icons.edit_note_rounded),
+                label: const Text('Edit Employee Profile', style: TextStyle(fontWeight: FontWeight.bold)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.teal,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                ),
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  Navigator.pushNamed(context, '/register', arguments: widget.employee).then((_) => _loadLogs());
+                },
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDetailRow(IconData icon, String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 20),
+      child: Row(
+        children: [
+          Icon(icon, color: Colors.white24, size: 20),
+          const SizedBox(width: 16),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label, style: const TextStyle(color: Colors.white38, fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: 0.5)),
+              const SizedBox(height: 2),
+              Text(value, style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w500)),
+            ],
+          ),
         ],
       ),
     );
