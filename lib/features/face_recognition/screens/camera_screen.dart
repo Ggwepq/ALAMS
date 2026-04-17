@@ -25,7 +25,6 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
   CameraController? _cameraController;
   bool _isCameraInitialized = false;
   bool _isProcessingFrame = false;
-  bool _isAdminMode = false;
   String? _cameraErrorMessage;
   DateTime _nextAvailableRecognition = DateTime.now();
 
@@ -205,30 +204,12 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
         _nextAvailableRecognition = DateTime.now().add(const Duration(seconds: 5));
 
         if (mounted) {
-          if (_isAdminMode) {
-            // ADMIN MODE: Only let Admins through
-            if (recognizedEmployee.isAdmin) {
-              setState(() => _isAdminMode = false);
-              await Navigator.of(context).pushNamed('/admin_dash');
-            } else {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                    content: Text('Access Denied: Not an Admin'),
-                    backgroundColor: Colors.redAccent),
-              );
-              // Restart stream if denied
-              if (mounted && _cameraController != null) {
-                _cameraController!.startImageStream(_onCameraFrame);
-              }
-            }
-          } else {
-            // USER MODE: Standard check-in
-            final actionToPass = widget.mode == 'SCAN' ? null : widget.mode;
-            await Navigator.of(context).pushNamed('/action', arguments: {
-              'employee': recognizedEmployee,
-              'action': actionToPass,
-            });
-          }
+          // USER MODE: Standard check-in
+          final actionToPass = widget.mode == 'SCAN' ? null : widget.mode;
+          await Navigator.of(context).pushNamed('/action', arguments: {
+            'employee': recognizedEmployee,
+            'action': actionToPass,
+          });
           
           // RESTART stream when coming back
           if (mounted && _cameraController != null) {
@@ -377,10 +358,10 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          _isAdminMode ? 'ADMIN SCAN' : 'ATTENDANCE',
+                        const Text(
+                          'ATTENDANCE',
                           style: TextStyle(
-                            color: _isAdminMode ? Colors.orangeAccent : Colors.tealAccent,
+                            color: Colors.tealAccent,
                             fontSize: 12,
                             fontWeight: FontWeight.bold,
                             letterSpacing: 2,
@@ -393,23 +374,10 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
                       ],
                     ),
                     const Spacer(),
-                    if (!_isAdminMode)
-                      ElevatedButton.icon(
-                        icon: const Icon(Icons.admin_panel_settings, size: 18),
-                        label: const Text('Admin'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.white10,
-                          foregroundColor: Colors.white70,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                          padding: const EdgeInsets.symmetric(horizontal: 16),
-                        ),
-                        onPressed: () => setState(() => _isAdminMode = true),
-                      )
-                    else
-                      IconButton.filledTonal(
-                        icon: const Icon(Icons.close),
-                        onPressed: () => setState(() => _isAdminMode = false),
-                      ),
+                    IconButton.filledTonal(
+                      icon: const Icon(Icons.close),
+                      onPressed: () => Navigator.of(context).pop(),
+                    ),
                   ],
                 ),
               ),
@@ -430,37 +398,26 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
             left: 0,
             right: 0,
             child: Center(
-              child: GestureDetector(
-                onLongPress: () {
-                  if (!_isAdminMode) {
-                    Feedback.forLongPress(context);
-                    setState(() => _isAdminMode = true);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Admin Scanning Mode Active')),
-                    );
-                  }
-                },
-                child: Column(
-                  children: [
-                    Image.network(
-                      'https://cdn-icons-png.flaticon.com/512/2932/2932915.png', // Replace with local logo if available
-                      width: 40,
-                      height: 40,
-                      color: _isAdminMode ? Colors.orangeAccent : Colors.white24,
-                      errorBuilder: (ctx, e, st) => Icon(Icons.shield_outlined, color: _isAdminMode ? Colors.orangeAccent : Colors.white24),
+              child: Column(
+                children: [
+                  Image.network(
+                    'https://cdn-icons-png.flaticon.com/512/2932/2932915.png', // Replace with local logo if available
+                    width: 40,
+                    height: 40,
+                    color: Colors.white24,
+                    errorBuilder: (ctx, e, st) => const Icon(Icons.shield_outlined, color: Colors.white24),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'SCAN TO LOG ATTENDANCE',
+                    style: TextStyle(
+                      color: Colors.white38,
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 1,
                     ),
-                    const SizedBox(height: 8),
-                    Text(
-                      _isAdminMode ? 'VERIFY ADMIN FACE' : 'SCAN TO LOG ATTENDANCE',
-                      style: TextStyle(
-                        color: _isAdminMode ? Colors.orangeAccent : Colors.white38,
-                        fontSize: 10,
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: 1,
-                      ),
-                    ),
-                  ],
-                ),
+                  ),
+                ],
               ),
             ),
           ),

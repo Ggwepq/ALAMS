@@ -6,6 +6,7 @@ class Employee {
   final String position;
   final String department;
   final String empId; // Auto-generated ID (e.g. EMP-001)
+  final String email;
   final bool isAdmin;
   final List<double> facialEmbedding;
   final String? username; // For admin login
@@ -19,6 +20,7 @@ class Employee {
     required this.position,
     required this.department,
     required this.empId,
+    this.email = '',
     this.isAdmin = false,
     required this.facialEmbedding,
     this.username,
@@ -33,6 +35,7 @@ class Employee {
       'position': position,
       'department': department,
       'emp_id': empId,
+      'email': email,
       'is_admin': isAdmin ? 1 : 0,
       'facial_embedding': facialEmbedding.join(','),
       'username': username,
@@ -51,6 +54,7 @@ class Employee {
       position: map['position'] as String? ?? 'Staff',
       department: map['department'] as String? ?? 'General',
       empId: map['emp_id'] as String? ?? 'EMP-XXX',
+      email: map['email'] as String? ?? '',
       isAdmin: (map['is_admin'] as int? ?? 0) == 1,
       username: map['username'] as String?,
       password: map['password'] as String?,

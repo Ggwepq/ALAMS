@@ -87,10 +87,7 @@ class _ActionScreenState extends ConsumerState<ActionScreen>
     if (status.status == AttendanceActionStatus.success) {
       // Reset liveness so we can recognise next person freshly
       ref.read(livenessServiceProvider).reset();
-      
-      // Go back to scanner after a short delay
-      await Future.delayed(const Duration(milliseconds: 2500));
-      if (mounted) Navigator.of(context).pop();
+      // WE REMOVE THE AUTO-POP HERE TO STAY ON DASHBOARD
     }
   }
 
@@ -108,96 +105,158 @@ class _ActionScreenState extends ConsumerState<ActionScreen>
       body: SafeArea(
         child: _isLoading
             ? const Center(child: CircularProgressIndicator(color: Colors.teal))
-            : Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 28),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    const SizedBox(height: 32),
-                    
-                    if (!isRecording && !isSuccess && !isError)
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: IconButton(
-                          icon: const Icon(Icons.arrow_back_ios_new, color: Colors.white70),
-                          onPressed: () => Navigator.of(context).pop(),
+            : Center(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 40),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      // ── Status Icon / Avatar ────────────────────────────
+                      _buildStatusIndicator(isRecording, isSuccess, isError),
+
+                      const SizedBox(height: 32),
+
+                      // ── Greeting ────────────────────────────────────────
+                      if (isSuccess)
+                        Text(
+                          _getGreeting(),
+                          style: const TextStyle(color: Colors.tealAccent, fontSize: 16, fontWeight: FontWeight.w600, letterSpacing: 1),
+                        ),
+
+                      const SizedBox(height: 12),
+
+                      // ── Employee Name ─────────────────────────────────────
+                      Text(
+                        _employee?.name ?? 'Employee',
+                        style: const TextStyle(
+                          fontSize: 32,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+
+                      const SizedBox(height: 12),
+
+                      // ── Employee Details Card ───────────────────────────
+                      Container(
+                        padding: const EdgeInsets.all(20),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.03),
+                          borderRadius: BorderRadius.circular(24),
+                          border: Border.all(color: Colors.white10),
+                        ),
+                        child: Column(
+                          children: [
+                            _buildInfoRow(Icons.badge_outlined, 'ID', widget.employee.empId),
+                            const Divider(color: Colors.white10, height: 24),
+                            _buildInfoRow(Icons.business_rounded, 'Dept', widget.employee.department),
+                            const Divider(color: Colors.white10, height: 24),
+                            _buildInfoRow(Icons.email_outlined, 'Email', widget.employee.email.isEmpty ? 'Not set' : widget.employee.email),
+                          ],
                         ),
                       ),
 
-                    const SizedBox(height: 12),
+                      const SizedBox(height: 48),
 
-                    // ── Status Icon / Avatar ────────────────────────────
-                    _buildStatusIndicator(isRecording, isSuccess, isError),
+                      // ── Action Result ────────────────────────────────────
+                      if (isRecording)
+                        const _StatusText(text: 'RECORDING LOG...', color: Colors.white38)
+                      else if (isSuccess)
+                        _buildSuccessModule()
+                      else if (isError)
+                        _StatusText(text: actionState.message ?? 'ERROR RECORDING LOG', color: Colors.redAccent),
 
-                    const SizedBox(height: 32),
+                      const SizedBox(height: 64),
 
-                    // ── Employee Name ─────────────────────────────────────
-                    Text(
-                      widget.employee.name,
-                      style: const TextStyle(
-                        fontSize: 28,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-
-                    const SizedBox(height: 8),
-
-                    // ── Employee Brief Profile ───────────────────────────
-                    Text(
-                      '${widget.employee.position}  •  ${widget.employee.department}',
-                      style: const TextStyle(color: Colors.tealAccent, fontSize: 13, fontWeight: FontWeight.w600),
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Employee ID: ${widget.employee.empId}',
-                      style: const TextStyle(color: Colors.white38, fontSize: 12),
-                      textAlign: TextAlign.center,
-                    ),
-
-                    const SizedBox(height: 48),
-
-                    // ── Action Message ────────────────────────────────────
-                    if (isRecording)
-                      const _StatusText(text: 'SECURELY RECORDING LOG...', color: Colors.white38)
-                    else if (isSuccess)
-                      Column(
-                        children: [
-                          const _StatusText(text: 'SUCCESSFULLY RECORDED', color: Colors.tealAccent),
-                          const SizedBox(height: 24),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
-                            decoration: BoxDecoration(
-                              color: Colors.teal.withOpacity(0.1),
-                              borderRadius: BorderRadius.circular(16),
-                              border: Border.all(color: Colors.teal.withOpacity(0.3)),
+                      // ── Dashboard Actions ────────────────────────────────
+                      if (isSuccess || isError) ...[
+                        SizedBox(
+                          width: double.infinity,
+                          height: 58,
+                          child: ElevatedButton.icon(
+                            icon: const Icon(Icons.history_rounded),
+                            label: const Text('View My Attendance History', style: TextStyle(fontWeight: FontWeight.bold)),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.white.withOpacity(0.05),
+                              foregroundColor: Colors.white70,
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                              side: const BorderSide(color: Colors.white10),
                             ),
-                            child: Text(
-                              'LOG TYPE: ${_lastAction == 'IN' ? 'TIME OUT' : 'TIME IN'}',
-                              style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold, letterSpacing: 1),
-                            ),
+                            onPressed: () => Navigator.pushNamed(context, '/user_history', arguments: widget.employee),
                           ),
-                        ],
-                      )
-                    else if (isError)
-                      _StatusText(text: actionState.message ?? 'ERROR RECORDING LOG', color: Colors.redAccent),
-
-                    const Spacer(),
-                    
-                    if (isSuccess)
-                      const Padding(
-                        padding: EdgeInsets.only(bottom: 40),
-                        child: Text(
-                          'Returning to home screen...',
-                          style: TextStyle(color: Colors.white10, fontSize: 12),
                         ),
-                      ),
-                  ],
+                        const SizedBox(height: 16),
+                        SizedBox(
+                          width: double.infinity,
+                          height: 58,
+                          child: ElevatedButton(
+                            onPressed: () => Navigator.of(context).pop(),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.teal,
+                              foregroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                            ),
+                            child: const Text('Done / Back to Home', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
                 ),
               ),
       ),
+    );
+  }
+
+  String _getGreeting() {
+    final hour = DateTime.now().hour;
+    if (hour < 12) return 'GOOD MORNING';
+    if (hour < 17) return 'GOOD AFTERNOON';
+    return 'GOOD EVENING';
+  }
+
+  Widget _buildInfoRow(IconData icon, String label, String value) {
+    return Row(
+      children: [
+        Icon(icon, color: Colors.tealAccent.withOpacity(0.5), size: 18),
+        const SizedBox(width: 12),
+        Text(label, style: const TextStyle(color: Colors.white38, fontSize: 13)),
+        const Spacer(),
+        Text(value, style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
+      ],
+    );
+  }
+
+  Widget _buildSuccessModule() {
+    final now = DateTime.now();
+    final timeStr = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+    
+    return Column(
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+          decoration: BoxDecoration(
+            color: Colors.teal.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: Colors.teal.withOpacity(0.3)),
+          ),
+          child: Column(
+            children: [
+              Text(
+                'LOGGED ${_lastAction == 'IN' ? 'OUT' : 'IN'}',
+                style: const TextStyle(color: Colors.tealAccent, fontSize: 24, fontWeight: FontWeight.bold, letterSpacing: 2),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Recorded at $timeStr',
+                style: const TextStyle(color: Colors.white60, fontSize: 14),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 

@@ -142,7 +142,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
                     ),
                     child: _isLoading
                         ? const CircularProgressIndicator(color: Colors.white)
-                        : const Text('Login securely', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                        : const Text('Login', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                   ),
                 ),
               ],

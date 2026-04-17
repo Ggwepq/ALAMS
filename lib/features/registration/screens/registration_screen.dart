@@ -32,6 +32,8 @@ class RegistrationScreen extends ConsumerStatefulWidget {
 class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
   // ── Profile data
   final _nameController = TextEditingController();
+  final _emailController = TextEditingController();
+  final _empIdController = TextEditingController();
   final _ageController = TextEditingController();
   final _positionController = TextEditingController();
   final _usernameController = TextEditingController();
@@ -74,22 +76,29 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
     final db = DatabaseService.instance;
     final depts = await db.getAllDepartments();
     final count = await db.getEmployeeCount();
+    final hasAdmin = await db.hasAdmin();
     
     if (mounted) {
       setState(() {
         _departments = depts.map((d) => d.name).toList();
-        _isFirstAdmin = count == 0;
+        _isFirstAdmin = !hasAdmin;
         
         if (widget.editEmployee != null) {
           _nameController.text = widget.editEmployee!.name;
+          _emailController.text = widget.editEmployee!.email;
+          _empIdController.text = widget.editEmployee!.empId;
           _ageController.text = widget.editEmployee!.age.toString();
           _positionController.text = widget.editEmployee!.position;
           _selectedSex = widget.editEmployee!.sex;
           _selectedDepartment = widget.editEmployee!.department;
           _usernameController.text = widget.editEmployee!.username ?? '';
           _passwordController.text = widget.editEmployee!.password ?? '';
-        } else if (_departments.isNotEmpty) {
-          _selectedDepartment = _departments.first;
+        } else {
+          // Auto-generate ID if not editing
+          _empIdController.text = 'EMP-${(count + 1).toString().padLeft(3, '0')}';
+          if (_departments.isNotEmpty) {
+            _selectedDepartment = _departments.first;
+          }
         }
       });
     }
@@ -98,6 +107,8 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
   @override
   void dispose() {
     _nameController.dispose();
+    _emailController.dispose();
+    _empIdController.dispose();
     _ageController.dispose();
     _positionController.dispose();
     _usernameController.dispose();
@@ -241,21 +252,28 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
 
     try {
       final db = DatabaseService.instance;
-      final avgEmbedding = _averageEmbeddings(_capturedEmbeddings);
+      // Admins (initial or edited) might skip face scan
+      final avgEmbedding = _capturedEmbeddings.isEmpty 
+          ? List<double>.filled(128, 0.0) 
+          : _averageEmbeddings(_capturedEmbeddings);
+          
       final name = _nameController.text.trim();
+      final email = _emailController.text.trim();
       final age = int.tryParse(_ageController.text.trim()) ?? 0;
       final position = _positionController.text.trim();
+      final empId = _empIdController.text.trim();
 
       if (widget.editEmployee != null) {
-        // EDIT MODE: Update existing record
+        // EDIT MODE
         final updated = Employee(
           id: widget.editEmployee!.id,
           name: name,
+          email: email,
           age: age,
           sex: _selectedSex,
           position: position,
           department: _selectedDepartment,
-          empId: widget.editEmployee!.empId,
+          empId: empId,
           isAdmin: widget.editEmployee!.isAdmin,
           facialEmbedding: avgEmbedding,
           username: widget.editEmployee!.isAdmin ? _usernameController.text : null,
@@ -270,19 +288,18 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
           });
         }
       } else {
-        // ENROLL MODE: Insert new record
-        final count = await db.getEmployeeCount();
-        final newIdNumber = 'EMP-${(count + 1).toString().padLeft(3, '0')}';
-        final bool isAdmin = count == 0;
+        // ENROLL MODE
+        final bool isAdmin = _isFirstAdmin;
 
         await db.insertEmployee(
           Employee(
             name: name,
+            email: email,
             age: age,
             sex: _selectedSex,
             position: position,
             department: _selectedDepartment,
-            empId: newIdNumber,
+            empId: empId,
             isAdmin: isAdmin,
             facialEmbedding: avgEmbedding,
             username: isAdmin ? _usernameController.text.trim() : null,
@@ -295,7 +312,7 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
             _step = RegistrationStep.success;
             _statusMessage = isAdmin 
                 ? '$name registered as SYSTEM ADMIN!' 
-                : '$name has been registered! ID: $newIdNumber';
+                : '$name has been registered! ID: $empId';
           });
         }
       }
@@ -341,6 +358,44 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
               style: const TextStyle(color: Colors.white),
               decoration: _buildInputDecoration('e.g. Juan Dela Cruz', Icons.person),
               validator: (v) => (v == null || v.trim().isEmpty) ? 'Name is required' : null,
+            ),
+            const SizedBox(height: 20),
+
+            // Email & ID
+            Row(
+              children: [
+                Expanded(
+                  flex: 3,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _buildFieldLabel('Email Address'),
+                      TextFormField(
+                        controller: _emailController,
+                        style: const TextStyle(color: Colors.white),
+                        decoration: _buildInputDecoration('name@company.com', Icons.email_outlined),
+                        keyboardType: TextInputType.emailAddress,
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  flex: 2,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _buildFieldLabel('Employee ID'),
+                      TextFormField(
+                        controller: _empIdController,
+                        enabled: false,
+                        style: const TextStyle(color: Colors.white60),
+                        decoration: _buildInputDecoration('ID-XXX', Icons.badge_outlined),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 20),
 
@@ -437,12 +492,19 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
 
             const SizedBox(height: 48),
             
+            const SizedBox(height: 48),
+            
             SizedBox(
               width: double.infinity,
               height: 58,
               child: ElevatedButton.icon(
-                icon: const Icon(Icons.camera_alt_outlined),
-                label: const Text('Proceed to Face Scan', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+                icon: Icon(_isFirstAdmin || (widget.editEmployee?.isAdmin ?? false) ? Icons.save_rounded : Icons.camera_alt_outlined),
+                label: Text(
+                  _isFirstAdmin || (widget.editEmployee?.isAdmin ?? false) 
+                      ? 'Save Admin Account' 
+                      : 'Proceed to Face Recognition', 
+                  style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold)
+                ),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.teal,
                   foregroundColor: Colors.white,
@@ -450,11 +512,15 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
                 ),
                 onPressed: () {
                   if (_formKey.currentState!.validate()) {
-                    setState(() {
-                      _step = RegistrationStep.scanFace;
-                      _currentPose = RegistrationPose.front;
-                    });
-                    _initCamera();
+                    if (_isFirstAdmin || (widget.editEmployee?.isAdmin ?? false)) {
+                      _saveEmployee();
+                    } else {
+                      setState(() {
+                        _step = RegistrationStep.scanFace;
+                        _currentPose = RegistrationPose.front;
+                      });
+                      _initCamera();
+                    }
                   }
                 },
               ),

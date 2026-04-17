@@ -22,7 +22,7 @@ class DatabaseService {
 
     return await openDatabase(
       path,
-      version: 3, // Increased version for Phase 10 migration
+      version: 4, // Increased version for Phase 11 refinement
       onCreate: _createDB,
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) {
@@ -47,6 +47,9 @@ class DatabaseService {
           // Seed initial department
           await db.insert('departments', {'name': 'General'});
         }
+        if (oldVersion < 4) {
+          await db.execute('ALTER TABLE employees ADD COLUMN email TEXT DEFAULT ""');
+        }
       },
     );
   }
@@ -61,6 +64,7 @@ class DatabaseService {
         position TEXT NOT NULL,
         department TEXT NOT NULL,
         emp_id TEXT NOT NULL,
+        email TEXT NOT NULL DEFAULT "",
         is_admin INTEGER NOT NULL,
         facial_embedding TEXT NOT NULL,
         username TEXT,
@@ -90,7 +94,7 @@ class DatabaseService {
 
   Future<int> getEmployeeCount() async {
     final db = await instance.database;
-    final result = await db.rawQuery('SELECT COUNT(*) FROM employees');
+    final result = await db.rawQuery('SELECT COUNT(*) FROM employees WHERE is_admin = 0');
     return Sqflite.firstIntValue(result) ?? 0;
   }
 
@@ -103,7 +107,8 @@ class DatabaseService {
 
   Future<List<Employee>> getAllEmployees() async {
     final db = await instance.database;
-    final result = await db.query('employees');
+    // Exclude admins from general lists
+    final result = await db.query('employees', where: 'is_admin = 0');
     return result.map((json) => Employee.fromMap(json)).toList();
   }
 
@@ -170,7 +175,7 @@ class DatabaseService {
     
     // Subquery to find the latest log ID for each employee today
     final result = await db.rawQuery('''
-      SELECT * FROM employees WHERE id IN (
+      SELECT * FROM employees WHERE is_admin = 0 AND id IN (
         SELECT a.employee_id 
         FROM attendance a
         INNER JOIN (
@@ -193,7 +198,7 @@ class DatabaseService {
     
     final result = await db.rawQuery('''
       SELECT * FROM employees 
-      WHERE id NOT IN (
+      WHERE is_admin = 0 AND id NOT IN (
         SELECT DISTINCT employee_id 
         FROM attendance 
         WHERE timestamp LIKE '$today%'
