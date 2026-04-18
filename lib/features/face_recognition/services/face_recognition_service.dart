@@ -154,7 +154,7 @@ class FaceRecognitionService {
   static RecognitionResult findBestMatch(
     List<double> liveEmbedding,
     List<MapEntry<String, List<double>>> knownFaces, {
-    double threshold = 0.6,
+    double threshold = 0.45,
   }) {
     if (knownFaces.isEmpty) {
       return const RecognitionResult(

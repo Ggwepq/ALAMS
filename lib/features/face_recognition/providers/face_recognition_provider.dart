@@ -16,7 +16,6 @@ final livenessServiceProvider = Provider<LivenessService>((ref) {
   return service;
 });
 
-/// Tracks the current liveness state across frames.
 final livenessStateProvider =
     NotifierProvider<_LivenessNotifier, LivenessState>(
   _LivenessNotifier.new,
@@ -26,6 +25,17 @@ class _LivenessNotifier extends Notifier<LivenessState> {
   @override
   LivenessState build() => LivenessState.waiting;
   void set(LivenessState state) => this.state = state;
+}
+
+final currentChallengeProvider =
+    NotifierProvider<_ChallengeNotifier, LivenessChallenge?>(
+  _ChallengeNotifier.new,
+);
+
+class _ChallengeNotifier extends Notifier<LivenessChallenge?> {
+  @override
+  LivenessChallenge? build() => null;
+  void set(LivenessChallenge? value) => state = value;
 }
 
 /// Holds the currently recognized employee name after a successful match.

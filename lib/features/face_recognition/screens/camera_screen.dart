@@ -152,10 +152,13 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
       final livenessService = ref.read(livenessServiceProvider);
       final prevState = livenessService.state;
       final livenessState = await livenessService.processFrame(inputImage);
+      
+      // Update Providers
       ref.read(livenessStateProvider.notifier).set(livenessState);
+      ref.read(currentChallengeProvider.notifier).set(livenessService.currentChallenge);
 
-      // Trigger Active Illumination (Flash) on first liveness activity
-      if (prevState == LivenessState.lookStraight && livenessState == LivenessState.blink) {
+      // Trigger Active Illumination (Flash) on transition to first challenge
+      if (prevState == LivenessState.lookStraight && livenessState == LivenessState.performingChallenge) {
         if (mounted) setState(() => _isFlashing = true);
         Future.delayed(const Duration(milliseconds: 150), () {
           if (mounted) setState(() => _isFlashing = false);
@@ -463,7 +466,7 @@ class _FaceOvalPainter extends CustomPainter {
     final Color strokeColor = switch (livenessState) {
       LivenessState.passed => Colors.tealAccent,
       LivenessState.lookStraight => Colors.orangeAccent,
-      LivenessState.blink => Colors.white,
+      LivenessState.performingChallenge => Colors.white,
       _ => Colors.white38,
     };
 
@@ -486,12 +489,14 @@ class _FaceOvalPainter extends CustomPainter {
 
 // ─── Liveness Status Badge ──────────────────────────────────────────────────
 
-class _LivenessStatusBadge extends StatelessWidget {
+class _LivenessStatusBadge extends ConsumerWidget {
   final LivenessState state;
   const _LivenessStatusBadge({required this.state});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final challenge = ref.watch(currentChallengeProvider);
+
     final (text, icon, color) = switch (state) {
       LivenessState.waiting => (
           'Position your face in the oval',
@@ -503,16 +508,7 @@ class _LivenessStatusBadge extends StatelessWidget {
           Icons.center_focus_strong,
           Colors.orange
         ),
-      LivenessState.blink => (
-          'Step 1: Blink naturally',
-          Icons.visibility,
-          Colors.tealAccent
-        ),
-      LivenessState.mouthOpen => (
-          'Step 2: Open your mouth slightly',
-          Icons.sentiment_satisfied_alt_outlined,
-          Colors.tealAccent
-        ),
+      LivenessState.performingChallenge => _getChallengeData(challenge),
       LivenessState.passed => (
           'Identity verified ✓',
           Icons.check_circle_outline,
@@ -550,5 +546,36 @@ class _LivenessStatusBadge extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  (String, IconData, Color) _getChallengeData(LivenessChallenge? challenge) {
+    return switch (challenge) {
+      LivenessChallenge.blink => (
+          'Step: Blink naturally',
+          Icons.visibility,
+          Colors.tealAccent
+        ),
+      LivenessChallenge.mouthOpen => (
+          'Step: Open your mouth slightly',
+          Icons.sentiment_satisfied_alt_outlined,
+          Colors.tealAccent
+        ),
+      LivenessChallenge.turnLeft => (
+          'Step: Turn your head LEFT',
+          Icons.arrow_back,
+          Colors.tealAccent
+        ),
+      LivenessChallenge.turnRight => (
+          'Step: Turn your head RIGHT',
+          Icons.arrow_forward,
+          Colors.tealAccent
+        ),
+      LivenessChallenge.smile => (
+          'Step: Smile for the camera',
+          Icons.emoji_emotions_outlined,
+          Colors.tealAccent
+        ),
+      null => ('Wait...', Icons.hourglass_empty, Colors.white60),
+    };
   }
 }
