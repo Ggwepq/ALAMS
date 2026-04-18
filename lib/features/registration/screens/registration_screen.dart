@@ -67,6 +67,7 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
   RegistrationStep _step = RegistrationStep.enterName;
   String _statusMessage = 'Look directly at the camera';
   String _errorMessage = '';
+  bool _obscurePassword = true;
 
   @override
   void initState() {
@@ -182,6 +183,32 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
         if (preprocessed != null) {
           final embedding = faceService.generateEmbedding(preprocessed);
           if (embedding != null) {
+            
+            // TASK 7: Face Duplicate Check (Only on the FIRST pose)
+            if (_currentPose == RegistrationPose.front) {
+              final db = DatabaseService.instance;
+              final allEmployees = await db.getAllEmployees();
+              final knownFaces = allEmployees
+                  .map((e) => MapEntry(e.name, e.facialEmbedding))
+                  .toList();
+                  
+              final result = FaceRecognitionService.findBestMatch(embedding, knownFaces, threshold: 0.35);
+              if (result.isRecognized) {
+                final bool? continueReg = await _showDuplicateFaceWarning(result.label);
+                if (continueReg != true) {
+                  _cameraController?.stopImageStream();
+                  if (mounted) {
+                    setState(() {
+                      _step = RegistrationStep.enterName;
+                      _isCameraReady = false;
+                      _capturedEmbeddings.clear();
+                    });
+                  }
+                  return;
+                }
+              }
+            }
+
             _capturedEmbeddings.add(embedding);
             _moveToNextPose();
           }
@@ -280,6 +307,7 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
           facialEmbedding: avgEmbedding,
           username: widget.editEmployee!.isAdmin ? _usernameController.text : null,
           password: widget.editEmployee!.isAdmin ? _passwordController.text : null,
+          isDeleted: widget.editEmployee!.isDeleted,
         );
         await db.updateEmployee(updated);
         
@@ -499,9 +527,19 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
               _buildFieldLabel('Admin Password'),
               TextFormField(
                 controller: _passwordController,
-                obscureText: true,
+                obscureText: _obscurePassword,
                 style: const TextStyle(color: Colors.white),
-                decoration: _buildInputDecoration('Password', Icons.lock),
+                decoration: _buildInputDecoration(
+                  'Password', 
+                  Icons.lock,
+                  suffixIcon: IconButton(
+                    icon: Icon(
+                      _obscurePassword ? Icons.visibility_off : Icons.visibility,
+                      color: Colors.white38,
+                    ),
+                    onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+                  ),
+                ),
                 validator: (v) => (v == null || v.trim().length < 4) ? 'Password must be 4+ characters' : null,
               ),
             ],
@@ -526,11 +564,35 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
                   foregroundColor: Colors.white,
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                 ),
-                onPressed: () {
+                onPressed: () async {
                   if (_formKey.currentState!.validate()) {
                     if (_isFirstAdmin || (widget.editEmployee?.isAdmin ?? false)) {
                       _saveEmployee();
                     } else {
+                      // TASK 7: NAME/ID VALIDATION
+                      final db = DatabaseService.instance;
+                      final employees = await db.getAllEmployees();
+                      
+                      final String name = _nameController.text.trim().toLowerCase();
+                      final String empId = _empIdController.text.trim().toLowerCase();
+                      
+                      final bool exists = employees.any((e) => 
+                        (e.name.toLowerCase() == name || e.empId.toLowerCase() == empId) &&
+                        e.id != widget.editEmployee?.id
+                      );
+
+                      if (exists) {
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Employee with this Name or ID already exists!'),
+                              backgroundColor: Colors.redAccent,
+                            ),
+                          );
+                        }
+                        return;
+                      }
+
                       setState(() {
                         _step = RegistrationStep.scanFace;
                         _currentPose = RegistrationPose.front;
@@ -555,10 +617,11 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
     );
   }
 
-  InputDecoration _buildInputDecoration(String hint, IconData icon) {
+  InputDecoration _buildInputDecoration(String hint, IconData icon, {Widget? suffixIcon}) {
     return InputDecoration(
       hintText: hint,
       hintStyle: const TextStyle(color: Colors.white38),
+      suffixIcon: suffixIcon,
       filled: true,
       fillColor: Colors.white10,
       border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none),
@@ -689,6 +752,32 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
   }
 
   // ─── Main Build ───────────────────────────────────────────────────────────
+
+  Future<bool?> _showDuplicateFaceWarning(String? matchedName) {
+    return showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF161B22),
+        title: const Text('Possible Duplicate Face', style: TextStyle(color: Colors.orangeAccent)),
+        content: Text(
+          'This face appears to match an already registered employee: $matchedName.\n\nAre you sure you want to proceed?',
+          style: const TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel registration', style: TextStyle(color: Colors.redAccent)),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.teal),
+            child: const Text('Proceed Anyway'),
+          ),
+        ],
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -826,4 +915,3 @@ class _GuidedOvalPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _GuidedOvalPainter old) => old.pose != pose || old.progress != progress;
 }
-

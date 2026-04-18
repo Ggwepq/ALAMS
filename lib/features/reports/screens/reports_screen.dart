@@ -287,6 +287,8 @@ class _LogTile extends StatelessWidget {
 
     final name = logMap['employee_name'] as String? ?? 'Unknown';
     final empId = logMap['employee_code'] as String? ?? 'N/A';
+    final isDeleted = (logMap['employee_deleted'] as int? ?? 0) == 1;
+    final status = logMap['status'] as String? ?? 'Normal';
 
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
@@ -315,11 +317,16 @@ class _LogTile extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  name,
-                  style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
-                  overflow: TextOverflow.ellipsis,
-                ),
+                  Text(
+                    isDeleted ? '$name (Deleted)' : name,
+                    style: TextStyle(
+                      color: isDeleted ? Colors.white38 : Colors.white, 
+                      fontSize: 15, 
+                      fontWeight: FontWeight.bold,
+                      decoration: isDeleted ? TextDecoration.lineThrough : null,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 Text(
                   'ID: $empId',
                   style: const TextStyle(color: Colors.white38, fontSize: 12),
@@ -341,6 +348,27 @@ class _LogTile extends StatelessWidget {
                   dateStr,
                   style: const TextStyle(color: Colors.white38, fontSize: 11),
                 ),
+                if (status != 'Normal')
+                  Container(
+                    margin: const EdgeInsets.only(top: 4),
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: (status == 'Late' || status == 'Early Out') 
+                          ? Colors.orangeAccent.withAlpha(40) 
+                          : Colors.tealAccent.withAlpha(40),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      status,
+                      style: TextStyle(
+                        color: (status == 'Late' || status == 'Early Out') 
+                            ? Colors.orangeAccent 
+                            : Colors.tealAccent,
+                        fontSize: 9,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
               ],
             ),
           ),

@@ -13,6 +13,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
   final _passwordController = TextEditingController();
   final _formKey = GlobalKey<FormState>();
   bool _isLoading = false;
+  bool _obscurePassword = true;
   String? _errorMessage;
 
   Future<void> _login() async {
@@ -100,9 +101,19 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
                 _buildFieldLabel('Password'),
                 TextFormField(
                   controller: _passwordController,
-                  obscureText: true,
+                  obscureText: _obscurePassword,
                   style: const TextStyle(color: Colors.white),
-                  decoration: _buildInputDecoration('Enter password', Icons.lock_outline),
+                  decoration: _buildInputDecoration(
+                    'Enter password', 
+                    Icons.lock_outline,
+                    suffixIcon: IconButton(
+                      icon: Icon(
+                        _obscurePassword ? Icons.visibility_off : Icons.visibility,
+                        color: Colors.white38,
+                      ),
+                      onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+                    ),
+                  ),
                   validator: (v) => (v == null || v.isEmpty) ? 'Required' : null,
                 ),
 
@@ -160,16 +171,17 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
     );
   }
 
-  InputDecoration _buildInputDecoration(String hint, IconData icon) {
+  InputDecoration _buildInputDecoration(String hint, IconData icon, {Widget? suffixIcon}) {
     return InputDecoration(
       hintText: hint,
       hintStyle: const TextStyle(color: Colors.white24),
       prefixIcon: Icon(icon, color: Colors.tealAccent.withOpacity(0.5), size: 22),
+      suffixIcon: suffixIcon,
       filled: true,
       fillColor: Colors.white.withOpacity(0.05),
       border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
       focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: const BorderSide(color: Colors.teal, width: 1.5)),
-      contentPadding: const EdgeInsets.symmetric(vertical: 20),
+      contentPadding: const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
     );
   }
 }

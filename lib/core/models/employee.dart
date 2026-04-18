@@ -11,6 +11,7 @@ class Employee {
   final List<double> facialEmbedding;
   final String? username; // For admin login
   final String? password; // For admin login
+  final bool isDeleted;
 
   Employee({
     this.id,
@@ -25,6 +26,7 @@ class Employee {
     required this.facialEmbedding,
     this.username,
     this.password,
+    this.isDeleted = false,
   });
 
   Map<String, dynamic> toMap() {
@@ -40,6 +42,7 @@ class Employee {
       'facial_embedding': facialEmbedding.join(','),
       'username': username,
       'password': password,
+      'is_deleted': isDeleted ? 1 : 0,
     };
     if (id != null) map['id'] = id;
     return map;
@@ -58,6 +61,7 @@ class Employee {
       isAdmin: (map['is_admin'] as int? ?? 0) == 1,
       username: map['username'] as String?,
       password: map['password'] as String?,
+      isDeleted: (map['is_deleted'] as int? ?? 0) == 1,
       facialEmbedding: (map['facial_embedding'] as String)
           .split(',')
           .map((e) => double.parse(e))

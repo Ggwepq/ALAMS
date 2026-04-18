@@ -22,7 +22,7 @@ class DatabaseService {
 
     final db = await openDatabase(
       path,
-      version: 4, 
+      version: 5, 
       onCreate: _createDB,
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) {
@@ -48,6 +48,10 @@ class DatabaseService {
         }
         if (oldVersion < 4) {
           await db.execute('ALTER TABLE employees ADD COLUMN email TEXT DEFAULT ""');
+        }
+        if (oldVersion < 5) {
+          await db.execute('ALTER TABLE employees ADD COLUMN is_deleted INTEGER DEFAULT 0');
+          await db.execute('ALTER TABLE attendance ADD COLUMN status TEXT DEFAULT "Normal"');
         }
       },
     );
@@ -94,7 +98,8 @@ class DatabaseService {
         is_admin INTEGER NOT NULL,
         facial_embedding TEXT NOT NULL,
         username TEXT,
-        password TEXT
+        password TEXT,
+        is_deleted INTEGER NOT NULL DEFAULT 0
       )
     ''');
 
@@ -104,6 +109,7 @@ class DatabaseService {
         employee_id INTEGER NOT NULL,
         timestamp TEXT NOT NULL,
         type TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT "Normal",
         FOREIGN KEY (employee_id) REFERENCES employees (id)
       )
     ''');
@@ -136,8 +142,8 @@ class DatabaseService {
     // Potentially fix NULL values from old migrations
     await db.execute('UPDATE employees SET is_admin = 0 WHERE is_admin IS NULL');
     
-    // Exclude admins from general lists
-    final result = await db.query('employees', where: 'is_admin != 1');
+    // Exclude admins and deleted employees from general lists
+    final result = await db.query('employees', where: 'is_admin != 1 AND is_deleted = 0');
     return result.map((json) => Employee.fromMap(json)).toList();
   }
 
@@ -150,7 +156,13 @@ class DatabaseService {
 
   Future<int> deleteEmployee(int id) async {
     final db = await instance.database;
-    return await db.delete('employees', where: 'id = ?', whereArgs: [id]);
+    // Perform SOFT DELETE instead of hard delete
+    return await db.update(
+      'employees', 
+      {'is_deleted': 1}, 
+      where: 'id = ?', 
+      whereArgs: [id]
+    );
   }
 
   Future<int> updateEmployee(Employee employee) async {
@@ -175,7 +187,37 @@ class DatabaseService {
 
   Future<int> insertAttendance(Attendance attendance) async {
     final db = await instance.database;
-    return await db.insert('attendance', attendance.toMap());
+    
+    // TASK 9: TIME BLOCKING / LABELING LOGIC
+    final now = DateTime.now();
+    final int hour = now.hour;
+    final int minute = now.minute;
+    
+    String finalStatus = attendance.status;
+    
+    if (attendance.type == 'IN') {
+      if (hour < 8 || (hour == 8 && minute == 0)) {
+        finalStatus = 'On Time';
+      } else {
+        finalStatus = 'Late';
+      }
+    } else if (attendance.type == 'OUT') {
+      if (hour < 17) {
+        finalStatus = 'Early Out';
+      } else {
+        finalStatus = 'Regular Out';
+      }
+    }
+    
+    final finalAttendance = Attendance(
+      id: attendance.id,
+      employeeId: attendance.employeeId,
+      timestamp: attendance.timestamp,
+      type: attendance.type,
+      status: finalStatus,
+    );
+
+    return await db.insert('attendance', finalAttendance.toMap());
   }
 
   Future<List<Attendance>> getAttendanceLogs() async {
@@ -195,7 +237,8 @@ class DatabaseService {
         a.timestamp,
         a.type,
         e.name AS employee_name,
-        e.emp_id AS employee_code
+        e.emp_id AS employee_code,
+        e.is_deleted AS employee_deleted
       FROM attendance a
       LEFT JOIN employees e ON a.employee_id = e.id
       WHERE a.timestamp LIKE '$today%'
@@ -211,7 +254,7 @@ class DatabaseService {
     
     // Subquery to find the latest log ID for each employee today
     final result = await db.rawQuery('''
-      SELECT * FROM employees WHERE is_admin = 0 AND id IN (
+      SELECT * FROM employees WHERE is_admin = 0 AND is_deleted = 0 AND id IN (
         SELECT a.employee_id 
         FROM attendance a
         INNER JOIN (
@@ -234,7 +277,7 @@ class DatabaseService {
     
     final result = await db.rawQuery('''
       SELECT * FROM employees 
-      WHERE is_admin = 0 AND id NOT IN (
+      WHERE is_admin = 0 AND is_deleted = 0 AND id NOT IN (
         SELECT DISTINCT employee_id 
         FROM attendance 
         WHERE timestamp LIKE '$today%'
@@ -269,7 +312,9 @@ class DatabaseService {
         a.employee_id,
         a.timestamp,
         a.type,
-        e.name AS employee_name
+        a.status,
+        e.name AS employee_name,
+        e.is_deleted AS employee_deleted
       FROM attendance a
       LEFT JOIN employees e ON a.employee_id = e.id
       ORDER BY a.timestamp DESC

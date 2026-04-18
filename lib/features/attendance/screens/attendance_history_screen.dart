@@ -37,7 +37,7 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFF0D1117),
       appBar: AppBar(
-        title: Text('${widget.employee.name}\'s History', 
+        title: Text(widget.employee.isDeleted ? '${widget.employee.name} (Deleted)' : '${widget.employee.name}\'s History', 
             style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
         backgroundColor: Colors.transparent,
         elevation: 0,
@@ -143,7 +143,34 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
               ],
             ),
           ),
-          Text(timeStr, style: const TextStyle(color: Colors.white70, fontSize: 14)),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(timeStr, style: const TextStyle(color: Colors.white70, fontSize: 14)),
+              if (log['status'] != null && log['status'] != 'Normal')
+                Container(
+                  margin: const EdgeInsets.only(top: 4),
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: (log['status'] == 'Late' || log['status'] == 'Early Out') 
+                        ? Colors.orangeAccent.withAlpha(40) 
+                        : Colors.tealAccent.withAlpha(40),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    log['status'] as String,
+                    style: TextStyle(
+                      color: (log['status'] == 'Late' || log['status'] == 'Early Out') 
+                          ? Colors.orangeAccent 
+                          : Colors.tealAccent,
+                      fontSize: 9,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+            ],
+          ),
         ],
       ),
     );

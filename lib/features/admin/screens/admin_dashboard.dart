@@ -162,7 +162,7 @@ class AdminDashboard extends ConsumerWidget {
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('Enroll New Person', 
+                    Text('Add Employee', 
                         style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
                     Text('Start the face registration flow', 
                         style: TextStyle(color: Colors.white70, fontSize: 14)),
@@ -199,7 +199,7 @@ class AdminDashboard extends ConsumerWidget {
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('Edit My Profile', 
+                    Text('Edit Admin Profile', 
                         style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
                     Text('Update credentials or re-scan face', 
                         style: TextStyle(color: Colors.white38, fontSize: 12)),
