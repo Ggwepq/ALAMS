@@ -16,6 +16,7 @@ import 'core/models/employee.dart';
 
 import 'features/admin/screens/admin_login_screen.dart';
 import 'features/admin/screens/department_management_screen.dart';
+import 'features/admin/screens/settings_screen.dart';
 
 // Global route observer to detect when screens come into focus
 final RouteObserver<ModalRoute<void>> routeObserver = RouteObserver<ModalRoute<void>>();
@@ -150,6 +151,11 @@ class AlamsApp extends StatelessWidget {
                 );
               },
               transitionDuration: const Duration(milliseconds: 350),
+            );
+
+          case '/settings':
+            return MaterialPageRoute(
+              builder: (_) => const SettingsScreen(),
             );
 
           case '/employee_list':

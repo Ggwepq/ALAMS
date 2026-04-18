@@ -62,7 +62,7 @@ class AttendanceNotifier extends Notifier<AttendanceActionState> {
       final db = ref.read(databaseServiceProvider);
       final timestamp = DateTime.now().toIso8601String();
 
-      await db.insertAttendance(
+      final statusText = await db.insertAttendance(
         Attendance(
           employeeId: employeeId,
           timestamp: timestamp,
@@ -72,14 +72,14 @@ class AttendanceNotifier extends Notifier<AttendanceActionState> {
 
       // Invalidate providers so logs refresh automatically
       ref.invalidate(attendanceLogsProvider);
+      ref.invalidate(attendanceLogsWithNamesProvider);
       ref.invalidate(attendanceLogsTodayProvider);
       ref.invalidate(currentlyWorkingProvider);
       ref.invalidate(absentTodayProvider);
 
       state = AttendanceActionState(
         status: AttendanceActionStatus.success,
-        message:
-            '$employeeName — Time $type recorded at ${_formatTime(timestamp)}',
+        message: statusText, // We set the message to the EXACT status label
       );
     } catch (e) {
       state = AttendanceActionState(
@@ -90,13 +90,6 @@ class AttendanceNotifier extends Notifier<AttendanceActionState> {
   }
 
   void reset() => state = const AttendanceActionState();
-
-  String _formatTime(String iso) {
-    final dt = DateTime.parse(iso);
-    final h = dt.hour.toString().padLeft(2, '0');
-    final m = dt.minute.toString().padLeft(2, '0');
-    return '$h:$m';
-  }
 }
 
 final attendanceNotifierProvider =

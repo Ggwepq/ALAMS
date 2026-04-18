@@ -88,6 +88,14 @@ class AdminDashboard extends ConsumerWidget {
               color: Colors.orangeAccent,
               route: '/departments',
             ),
+            _buildMenuTile(
+              context,
+              title: 'System Settings',
+              subtitle: 'Set work hours & rules',
+              icon: Icons.settings_rounded,
+              color: Colors.grey,
+              route: '/settings',
+            ),
             const SizedBox(height: 40),
             Center(
               child: TextButton.icon(

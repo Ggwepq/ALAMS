@@ -22,7 +22,7 @@ class DatabaseService {
 
     final db = await openDatabase(
       path,
-      version: 5, 
+      version: 6, 
       onCreate: _createDB,
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) {
@@ -52,6 +52,16 @@ class DatabaseService {
         if (oldVersion < 5) {
           await db.execute('ALTER TABLE employees ADD COLUMN is_deleted INTEGER DEFAULT 0');
           await db.execute('ALTER TABLE attendance ADD COLUMN status TEXT DEFAULT "Normal"');
+        }
+        if (oldVersion < 6) {
+          await db.execute('''
+            CREATE TABLE system_settings (
+              key TEXT PRIMARY KEY,
+              value TEXT NOT NULL
+            )
+          ''');
+          await db.insert('system_settings', {'key': 'work_start', 'value': '08:00'});
+          await db.insert('system_settings', {'key': 'work_end', 'value': '17:00'});
         }
       },
     );
@@ -122,6 +132,16 @@ class DatabaseService {
     ''');
     
     await db.insert('departments', {'name': 'General'});
+
+    await db.execute('''
+      CREATE TABLE system_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      )
+    ''');
+
+    await db.insert('system_settings', {'key': 'work_start', 'value': '08:00'});
+    await db.insert('system_settings', {'key': 'work_end', 'value': '17:00'});
   }
 
   Future<int> getEmployeeCount() async {
@@ -185,10 +205,24 @@ class DatabaseService {
 
   // ─── Attendance ─────────────────────────────────────────────────────────────
 
-  Future<int> insertAttendance(Attendance attendance) async {
+  Future<String> insertAttendance(Attendance attendance) async {
     final db = await instance.database;
     
-    // TASK 9: TIME BLOCKING / LABELING LOGIC
+    // FETCH WORK HOURS
+    final startRes = await db.query('system_settings', where: 'key = ?', whereArgs: ['work_start']);
+    final endRes = await db.query('system_settings', where: 'key = ?', whereArgs: ['work_end']);
+    
+    final workStartStr = startRes.isNotEmpty ? startRes.first['value'] as String : '08:00';
+    final workEndStr = endRes.isNotEmpty ? endRes.first['value'] as String : '17:00';
+    
+    final partsStart = workStartStr.split(':');
+    final startH = int.parse(partsStart[0]);
+    final startM = int.parse(partsStart[1]);
+    
+    final partsEnd = workEndStr.split(':');
+    final endH = int.parse(partsEnd[0]);
+    final endM = int.parse(partsEnd[1]);
+
     final now = DateTime.now();
     final int hour = now.hour;
     final int minute = now.minute;
@@ -196,13 +230,13 @@ class DatabaseService {
     String finalStatus = attendance.status;
     
     if (attendance.type == 'IN') {
-      if (hour < 8 || (hour == 8 && minute == 0)) {
+      if (hour < startH || (hour == startH && minute <= startM)) {
         finalStatus = 'On Time';
       } else {
         finalStatus = 'Late';
       }
     } else if (attendance.type == 'OUT') {
-      if (hour < 17) {
+      if (hour < endH || (hour == endH && minute < endM)) {
         finalStatus = 'Early Out';
       } else {
         finalStatus = 'Regular Out';
@@ -217,7 +251,8 @@ class DatabaseService {
       status: finalStatus,
     );
 
-    return await db.insert('attendance', finalAttendance.toMap());
+    await db.insert('attendance', finalAttendance.toMap());
+    return finalStatus;
   }
 
   Future<List<Attendance>> getAttendanceLogs() async {
@@ -381,6 +416,23 @@ class DatabaseService {
       dept.toMap(),
       where: 'id = ?',
       whereArgs: [dept.id],
+    );
+  }
+  // ─── Settings ─────────────────────────────────────────────────────────────
+
+  Future<String> getSetting(String key, String defaultValue) async {
+    final db = await instance.database;
+    final res = await db.query('system_settings', where: 'key = ?', whereArgs: [key]);
+    if (res.isEmpty) return defaultValue;
+    return res.first['value'] as String;
+  }
+
+  Future<void> updateSetting(String key, String value) async {
+    final db = await instance.database;
+    await db.insert(
+      'system_settings',
+      {'key': key, 'value': value},
+      conflictAlgorithm: ConflictAlgorithm.replace,
     );
   }
 }

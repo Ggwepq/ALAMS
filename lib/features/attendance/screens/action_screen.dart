@@ -230,28 +230,49 @@ class _ActionScreenState extends ConsumerState<ActionScreen>
   }
 
   Widget _buildSuccessModule() {
+    final actionState = ref.watch(attendanceNotifierProvider);
+    final status = actionState.message ?? 'Normal';
     final now = DateTime.now();
     final timeStr = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
     
+    // Color coding based on status
+    final bool isWarning = status == 'Late' || status == 'Early Out';
+    final Color statusColor = isWarning ? Colors.orangeAccent : Colors.tealAccent;
+
     return Column(
       children: [
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+          padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 20),
           decoration: BoxDecoration(
-            color: Colors.teal.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: Colors.teal.withOpacity(0.3)),
+            color: statusColor.withOpacity(0.05),
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: statusColor.withOpacity(0.3)),
+            boxShadow: [
+              BoxShadow(color: statusColor.withOpacity(0.05), blurRadius: 20, spreadRadius: 5),
+            ],
           ),
           child: Column(
             children: [
               Text(
                 'LOGGED ${_lastAction == 'IN' ? 'OUT' : 'IN'}',
-                style: const TextStyle(color: Colors.tealAccent, fontSize: 24, fontWeight: FontWeight.bold, letterSpacing: 2),
+                style: const TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.bold, letterSpacing: 2),
               ),
-              const SizedBox(height: 4),
+              const SizedBox(height: 8),
               Text(
-                'Recorded at $timeStr',
-                style: const TextStyle(color: Colors.white60, fontSize: 14),
+                status.toUpperCase(),
+                style: TextStyle(color: statusColor, fontSize: 32, fontWeight: FontWeight.w900, letterSpacing: 1),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.access_time_rounded, color: Colors.white38, size: 14),
+                  const SizedBox(width: 6),
+                  Text(
+                    'Recorded at $timeStr',
+                    style: const TextStyle(color: Colors.white38, fontSize: 13, fontWeight: FontWeight.w500),
+                  ),
+                ],
               ),
             ],
           ),
