@@ -27,6 +27,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
   bool _isProcessingFrame = false;
   String? _cameraErrorMessage;
   DateTime _nextAvailableRecognition = DateTime.now();
+  bool _isFlashing = false;
 
   // Throttle: process one frame every 400ms to avoid overwhelming low-end devices.
   DateTime _lastProcessed = DateTime.fromMillisecondsSinceEpoch(0);
@@ -149,8 +150,17 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
 
       // Step 1: Liveness check
       final livenessService = ref.read(livenessServiceProvider);
+      final prevState = livenessService.state;
       final livenessState = await livenessService.processFrame(inputImage);
       ref.read(livenessStateProvider.notifier).set(livenessState);
+
+      // Trigger Active Illumination (Flash) on first liveness activity
+      if (prevState == LivenessState.lookStraight && livenessState == LivenessState.blink) {
+        if (mounted) setState(() => _isFlashing = true);
+        Future.delayed(const Duration(milliseconds: 150), () {
+          if (mounted) setState(() => _isFlashing = false);
+        });
+      }
 
       // Only proceed to recognition after liveness passes
       if (livenessState != LivenessState.passed) return;
@@ -321,6 +331,16 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
             scale: scale,
             child: Center(child: CameraPreview(_cameraController!)),
           ),
+          
+          // ── Active Illumination Overlay ───────────────────────────
+          if (_isFlashing)
+            Positioned.fill(
+              child: AnimatedOpacity(
+                duration: const Duration(milliseconds: 100),
+                opacity: _isFlashing ? 0.4 : 0.0,
+                child: Container(color: Colors.cyanAccent),
+              ),
+            ),
 
           // ── Dark gradient at bottom ───────────────────────────────
           Positioned(
@@ -484,12 +504,17 @@ class _LivenessStatusBadge extends StatelessWidget {
           Colors.orange
         ),
       LivenessState.blink => (
-          'Now blink naturally',
+          'Step 1: Blink naturally',
           Icons.visibility,
           Colors.tealAccent
         ),
+      LivenessState.mouthOpen => (
+          'Step 2: Open your mouth slightly',
+          Icons.sentiment_satisfied_alt_outlined,
+          Colors.tealAccent
+        ),
       LivenessState.passed => (
-          'Liveness confirmed ✓',
+          'Identity verified ✓',
           Icons.check_circle_outline,
           Colors.tealAccent
         ),

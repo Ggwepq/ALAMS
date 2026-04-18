@@ -107,28 +107,47 @@ class _DepartmentManagementScreenState extends State<DepartmentManagementScreen>
                           itemBuilder: (ctx, idx) {
                             final dept = _departments[idx];
                             return Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                               decoration: BoxDecoration(
                                 color: Colors.white.withOpacity(0.03),
                                 borderRadius: BorderRadius.circular(16),
                                 border: Border.all(color: Colors.white10),
                               ),
-                              child: Row(
-                                children: [
-                                  const Icon(Icons.business_rounded, color: Colors.tealAccent, size: 20),
-                                  const SizedBox(width: 16),
-                                  Expanded(
-                                    child: Text(
-                                      dept.name,
-                                      style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w500),
-                                    ),
+                              child: InkWell(
+                                borderRadius: BorderRadius.circular(16),
+                                onTap: () => Navigator.pushNamed(
+                                  context, 
+                                  '/employee_list', 
+                                  arguments: {'department': dept.name}
+                                ),
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                                  child: Row(
+                                    children: [
+                                      const Icon(Icons.business_rounded, color: Colors.tealAccent, size: 20),
+                                      const SizedBox(width: 16),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              dept.name,
+                                              style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w500),
+                                            ),
+                                            const Text(
+                                              'Tap to view personnel',
+                                              style: TextStyle(color: Colors.white24, fontSize: 11),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      if (dept.name != 'General')
+                                        IconButton(
+                                          icon: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 20),
+                                          onPressed: () => _deleteDepartment(dept.id!),
+                                        ),
+                                    ],
                                   ),
-                                  if (dept.name != 'General')
-                                    IconButton(
-                                      icon: const Icon(Icons.delete_outline, color: Colors.redAccent, size: 20),
-                                      onPressed: () => _deleteDepartment(dept.id!),
-                                    ),
-                                ],
+                                ),
                               ),
                             );
                           },

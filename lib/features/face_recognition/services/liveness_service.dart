@@ -1,11 +1,13 @@
 import 'package:flutter/foundation.dart';
+import 'package:flutter/painting.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 
 /// State of the liveness check.
 enum LivenessState {
   waiting,        // Waiting for face to appear
-  lookStraight,   // Instruction: face the camera straight
-  blink,          // Instruction: blink
+  lookStraight,   // Step 0: Face stability check
+  blink,          // Step 1: instruction: blink
+  mouthOpen,      // Step 2: instruction: open mouth
   passed,         // Liveness confirmed
   failed,         // Multiple failed attempts detected
 }
@@ -14,9 +16,9 @@ class LivenessService {
   final FaceDetector _detector = FaceDetector(
     options: FaceDetectorOptions(
       enableClassification: true,    // enables eye-open probability
-      enableLandmarks: true,         // enables facial landmarks
-      enableContours: false,
-      enableTracking: true,          // track same face across frames
+      enableLandmarks: true,         
+      enableContours: true,          // NEED THIS for mouth opening check
+      enableTracking: true,          
       minFaceSize: 0.15,
       performanceMode: FaceDetectorMode.fast,
     ),
@@ -24,74 +26,101 @@ class LivenessService {
 
   LivenessState _state = LivenessState.waiting;
   int _blinkCount = 0;
-  bool _eyeWasClosed = false;
   int _closedFrames = 0;
-  static const int _minClosedFrames = 1;
+  
+  // Stability Check Variables
+  int _stabilityFrames = 0;
+  Rect? _lastFaceRect;
+  static const int _minStabilityFrames = 4; // Relaxed (was 10)
+  static const double _stabilityDelta = 30.0; // Relaxed (was 15.0)
+
+  // Detection Thresholds
+  static const int _minClosedFrames = 3; // Relaxed (was 5)
+  static const double _eyeClosedThreshold = 0.40; // Relaxed (was 0.30)
 
   LivenessState get state => _state;
 
-  // Thresholds: Higher means easier to count as 'open', lower means easier to count as 'closed'
-  double _eyeClosedThreshold = 0.35; // Lower = must be more closed
-  double _eyeOpenThreshold = 0.65;   // Higher = must be more open
-
-  /// Process a single [InputImage] frame. Returns updated [LivenessState].
+  /// Process a single [InputImage] frame.
   Future<LivenessState> processFrame(InputImage inputImage) async {
     final faces = await _detector.processImage(inputImage);
 
     if (faces.isEmpty) {
+      _resetInternal();
       _state = LivenessState.waiting;
-      _eyeWasClosed = false;
-      _closedFrames = 0;
       return _state;
     }
 
-    // Use the largest / most prominent face
+    // Pick the largest face (closest)
     final face = faces.reduce((a, b) => _faceArea(a) > _faceArea(b) ? a : b);
 
-    // Step 1: Require roughly frontal pose
-    final eulerY = face.headEulerAngleY ?? 0;
-    final eulerZ = face.headEulerAngleZ ?? 0;
-    if (eulerY.abs() > 20 || eulerZ.abs() > 20) {
-      _state = LivenessState.lookStraight;
+    // Step 0: Stability Check (Ensures deliberate interaction, not just a passing face/photo)
+    if (_state == LivenessState.waiting || _state == LivenessState.lookStraight) {
+      if (_lastFaceRect != null) {
+        final dx = (face.boundingBox.left - _lastFaceRect!.left).abs();
+        final dy = (face.boundingBox.top - _lastFaceRect!.top).abs();
+        
+        if (dx < _stabilityDelta && dy < _stabilityDelta) {
+          _stabilityFrames++;
+        } else {
+          _stabilityFrames = 0;
+        }
+      }
+      _lastFaceRect = face.boundingBox;
+      
+      if (_stabilityFrames < _minStabilityFrames) {
+        _state = LivenessState.lookStraight;
+        return _state;
+      }
+    }
+
+    // Step 1: Stricter Blink Detection
+    if (_blinkCount < 1) {
+      _state = LivenessState.blink;
+      final leftOpen = face.leftEyeOpenProbability ?? 1.0;
+      final rightOpen = face.rightEyeOpenProbability ?? 1.0;
+      final avgOpen = (leftOpen + rightOpen) / 2.0;
+
+      if (avgOpen < _eyeClosedThreshold) {
+        _closedFrames++;
+        if (_closedFrames >= _minClosedFrames) {
+          _blinkCount++;
+          debugPrint('[Liveness] Blink confirmed after $_closedFrames frames.');
+        }
+      } else {
+        _closedFrames = 0;
+      }
       return _state;
     }
 
-    // Step 2: Blink detection
-    final leftOpen = face.leftEyeOpenProbability ?? 1.0;
-    final rightOpen = face.rightEyeOpenProbability ?? 1.0;
-    final avgOpen = (leftOpen + rightOpen) / 2;
-
-    final bool eyesCurrentlyClosed = avgOpen < _eyeClosedThreshold;
-    final bool eyesCurrentlyOpen = avgOpen > _eyeOpenThreshold;
-
-    // Transition Logic:
-    // 1. If eyes are closed, start/continue counting closed frames.
-    if (eyesCurrentlyClosed) {
-      _closedFrames++;
-      _eyeWasClosed = true;
-    } 
-    // 2. If eyes were closed and are now open, check if it was a valid blink.
-    else if (_eyeWasClosed && eyesCurrentlyOpen) {
-      if (_closedFrames >= _minClosedFrames) {
-        _blinkCount++;
-        debugPrint('[Liveness] Valid blink detected. Total: $_blinkCount');
-      }
-      _eyeWasClosed = false;
-      _closedFrames = 0;
-    }
-    // 3. Reset if eyes are just open and we haven't started a blink.
-    else if (eyesCurrentlyOpen) {
-      _eyeWasClosed = false;
-      _closedFrames = 0;
-    }
-
-    if (_blinkCount >= 1) {
+    // Step 2: Randomized Challenge - Mouth Opening
+    _state = LivenessState.mouthOpen;
+    final bool isMouthOpen = _checkMouthOpen(face);
+    
+    if (isMouthOpen) {
+      debugPrint('[Liveness] Mouth opening confirmed.');
       _state = LivenessState.passed;
-    } else {
-      _state = LivenessState.blink;
     }
 
     return _state;
+  }
+
+  bool _checkMouthOpen(Face face) {
+    final upperLip = face.contours[FaceContourType.upperLipBottom]?.points;
+    final lowerLip = face.contours[FaceContourType.lowerLipTop]?.points;
+
+    if (upperLip == null || lowerLip == null || upperLip.isEmpty || lowerLip.isEmpty) {
+      return false;
+    }
+
+    final upperMid = upperLip[upperLip.length ~/ 2];
+    final lowerMid = lowerLip[lowerLip.length ~/ 2];
+
+    final gap = (lowerMid.y - upperMid.y).abs();
+    final faceHeight = face.boundingBox.height;
+    final normalizedGap = gap / faceHeight;
+
+    // Stricter threshold at 0.08
+    return normalizedGap > 0.08;
   }
 
   double _faceArea(Face face) {
@@ -99,11 +128,16 @@ class LivenessService {
     return bb.width * bb.height;
   }
 
-  /// Reset liveness state for a new recognition attempt.
-  void reset() {
-    _state = LivenessState.waiting;
+  void _resetInternal() {
     _blinkCount = 0;
-    _eyeWasClosed = false;
+    _closedFrames = 0;
+    _stabilityFrames = 0;
+    _lastFaceRect = null;
+  }
+
+  void reset() {
+    _resetInternal();
+    _state = LivenessState.waiting;
   }
 
   void dispose() {

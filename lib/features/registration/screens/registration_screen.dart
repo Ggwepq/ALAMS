@@ -8,6 +8,8 @@ import '../../../core/database/database_service.dart';
 import '../../../core/models/employee.dart';
 import '../../../core/utils/image_utils.dart';
 import '../../face_recognition/services/face_recognition_service.dart';
+import '../../attendance/providers/attendance_provider.dart';
+import '../providers/employee_provider.dart';
 
 // States for the overall registration flow
 enum RegistrationStep { enterName, scanFace, processing, success, error }
@@ -281,6 +283,9 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
         );
         await db.updateEmployee(updated);
         
+        // Sync real-time UI
+        _syncProviders();
+        
         if (mounted) {
           setState(() {
             _step = RegistrationStep.success;
@@ -307,6 +312,9 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
           ),
         );
 
+        // Sync real-time UI
+        _syncProviders();
+
         if (mounted) {
           setState(() {
             _step = RegistrationStep.success;
@@ -324,6 +332,14 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
         });
       }
     }
+  }
+
+  void _syncProviders() {
+    // Invalidate everything to force a clean re-fetch across the app
+    ref.invalidate(employeesProvider);
+    ref.invalidate(currentlyWorkingProvider);
+    ref.invalidate(absentTodayProvider);
+    ref.invalidate(attendanceLogsWithNamesProvider);
   }
 
   List<double> _averageEmbeddings(List<List<double>> embeddings) {

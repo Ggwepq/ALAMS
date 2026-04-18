@@ -93,16 +93,20 @@ The `RootGuardian` acts as the application's entry gatekeeper:
 
 ## 6. Technical Deep Dive
 
-### Face Recognition Pipeline (4 Stages)
+### Face Recognition Pipeline (5 Stages)
 1.  **Face Detection**: ML Kit identifies a face and head orientation. The system waits for a "stable" face before proceeding.
-2.  **Preprocessing**:
+2.  **Liveness & Anti-Spoofing (Multi-Challenge)**:
+    *   **Stricter Blink**: Requires eyes to be closed for 3+ consecutive frames to prevent accidental triggers.
+    *   **Mouth Opening**: Mandatory mouth-opening challenge to prevent static photo/video attacks.
+    *   **Active Illumination**: A brief cyan flash used to detect diffuse skin reflection vs. mirror-like screen reflections.
+3.  **Preprocessing**:
     *   **Colorspace Conversion**: The `CameraImage` (YUV420) is converted to RGB.
-    *   **Normalization**: Pixel values are normalized to `[-1, 1]` using the formula: `(Value / 127.5) - 1.0`. 
-3.  **Embedding Generation**: The 160x160 image is passed through the FaceNet interpreter to produce a unique 128-float vector.
-4.  **Matching (Cosine Similarity)**:
-    *   We use **Cosine Distance** instead of Euclidean distance to account for variations in lighting intensity.
+    *   **Normalization**: Pixel values are normalized to `[-1, 1]` for the model.
+4.  **Embedding Generation**: The 160x160 image produces a unique 128-float vector.
+5.  **Matching (Cosine Similarity)**:
+    *   Uses **Cosine Distance** to account for variations in lighting intensity.
     *   **Formula**: `1.0 - (A · B / (||A|| * ||B||))`.
-    *   **Threshold**: `0.6`. A distance below this value is considered a "Match".
+    *   **Threshold**: `0.6` for recognition.
 
 ### Guided Pose Enrollment
 To build a robust profile, employees must provide 5 poses:
@@ -133,10 +137,24 @@ ALAMS eliminates the "Time In vs Time Out" button confusion:
 *   **v3**: Added **Department Management** and raw text credentials (`username`/`password`) for administrative logins.
 *   **v4**: Integrated **Email Support** and refined administrative logic to fix registry filtering.
 
-## 8. Design Philosophy
+## 8. Operational Workflows
+
+### Initial Setup (Default Seeding)
+To ensure immediate usability, ALAMS automatically seeds an administrative account if none exists in the database.
+*   **Default Username**: `admin`
+*   **Default Password**: `admin`
+*   **Role**: System Administrator (`is_admin = 1`).
+*   **Recommendation**: Administrators should update these credentials via the Dashboard immediately after login.
+
+### Daily Attendance Workflow
+1.  **Orientation**: User positions face within the guide.
+2.  **Verification**: System cycles through the Liveness Challenge (Cyan Flash -> Blink -> Mouth Open).
+3.  **Auto-Action**: System determines if the user should "Time In" or "Time Out" based on their last recorded log.
+
+## 9. Design Philosophy
 *   **Professional UX**: A focused, dark-themed interface that feels like a dedicated hardware appliance.
 *   **Accessibility**: High-contrast text, clear iconography, and large touch targets for industrial environments.
 *   **Zero-Maintenance**: Automated metric reconciliation and log management mean the administrator only needs to focus on managing personnel, not the technology.
 
 ---
-*ALAMS Technical Manual | Version 1.1 (Phase 11 Update)*
+*ALAMS Technical Manual | Version 1.2 (Security Update)*

@@ -20,9 +20,9 @@ class DatabaseService {
     final dbPath = await getDatabasesPath();
     final path = join(dbPath, filePath);
 
-    return await openDatabase(
+    final db = await openDatabase(
       path,
-      version: 4, // Increased version for Phase 11 refinement
+      version: 4, 
       onCreate: _createDB,
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) {
@@ -44,7 +44,6 @@ class DatabaseService {
             )
           ''');
           
-          // Seed initial department
           await db.insert('departments', {'name': 'General'});
         }
         if (oldVersion < 4) {
@@ -52,6 +51,33 @@ class DatabaseService {
         }
       },
     );
+
+    // Seed default admin if none exists
+    await _seedDefaultAdmin(db);
+    
+    return db;
+  }
+
+  Future<void> _seedDefaultAdmin(Database db) async {
+    final result = await db.rawQuery('SELECT COUNT(*) FROM employees WHERE is_admin = 1');
+    final count = Sqflite.firstIntValue(result) ?? 0;
+    
+    if (count == 0) {
+      await db.insert('employees', {
+        'name': 'System Admin',
+        'age': 0,
+        'sex': 'Other',
+        'position': 'Administrator',
+        'department': 'General',
+        'emp_id': 'ADMIN-001',
+        'email': 'admin@alams.com',
+        'is_admin': 1,
+        'facial_embedding': List.filled(128, 0.0).join(','),
+        'username': 'admin',
+        'password': 'admin',
+      });
+      print('[Database] Default admin seeded: admin/admin');
+    }
   }
 
   Future _createDB(Database db, int version) async {

@@ -5,11 +5,43 @@ import '../../../core/models/employee.dart';
 
 import '../providers/employee_provider.dart';
 
-class EmployeeListScreen extends ConsumerWidget {
+class EmployeeListScreen extends ConsumerStatefulWidget {
   const EmployeeListScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<EmployeeListScreen> createState() => _EmployeeListScreenState();
+}
+
+class _EmployeeListScreenState extends ConsumerState<EmployeeListScreen> {
+  final _searchController = TextEditingController();
+  String _searchQuery = '';
+  String? _filterDept;
+  bool _isInit = true;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_isInit) {
+      final settings = ModalRoute.of(context)?.settings;
+      if (settings?.arguments is Map<String, dynamic>) {
+        final args = settings!.arguments as Map<String, dynamic>;
+        if (args.containsKey('department')) {
+          _filterDept = args['department'];
+          debugPrint('[EmployeeList] Filtering by Department: $_filterDept');
+        }
+      }
+      _isInit = false;
+    }
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final employeesAsync = ref.watch(employeesProvider);
 
     return Scaffold(
@@ -17,33 +49,89 @@ class EmployeeListScreen extends ConsumerWidget {
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
-        title: const Text('Registered Persons',
-            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        title: Text(_filterDept == null ? 'Registered Persons' : '$_filterDept Personnel',
+            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
         iconTheme: const IconThemeData(color: Colors.white),
+        actions: [
+          if (_filterDept != null)
+            IconButton(
+              icon: const Icon(Icons.filter_list_off),
+              onPressed: () => setState(() => _filterDept = null),
+              tooltip: 'Clear Dept Filter',
+            ),
+          const SizedBox(width: 8),
+        ],
       ),
-      body: employeesAsync.when(
-        data: (employees) {
-          if (employees.isEmpty) {
-            return const Center(
-              child: Text('No persons registered yet.',
-                  style: TextStyle(color: Colors.white54)),
-            );
-          }
+      body: Column(
+        children: [
+          // Search Bar
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+            child: TextField(
+              controller: _searchController,
+              onChanged: (v) => setState(() => _searchQuery = v),
+              style: const TextStyle(color: Colors.white),
+              decoration: InputDecoration(
+                hintText: 'Search by name...',
+                hintStyle: const TextStyle(color: Colors.white38),
+                prefixIcon: const Icon(Icons.search, color: Colors.white38),
+                suffixIcon: _searchQuery.isNotEmpty 
+                  ? IconButton(
+                      icon: const Icon(Icons.clear, size: 18),
+                      onPressed: () {
+                        _searchController.clear();
+                        setState(() => _searchQuery = '');
+                      },
+                    )
+                  : null,
+                filled: true,
+                fillColor: Colors.white.withOpacity(0.05),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                contentPadding: const EdgeInsets.symmetric(vertical: 0),
+              ),
+            ),
+          ),
+          
+          Expanded(
+            child: RefreshIndicator(
+              onRefresh: () async => ref.invalidate(employeesProvider),
+              color: Colors.tealAccent,
+              child: employeesAsync.when(
+                data: (employees) {
+                  // Apply Filters
+                  final filtered = employees.where((e) {
+                    final matchesName = e.name.toLowerCase().contains(_searchQuery.toLowerCase());
+                    final matchesDept = _filterDept == null || e.department == _filterDept;
+                    return matchesName && matchesDept;
+                  }).toList();
 
-          return ListView.builder(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            itemCount: employees.length,
-            itemBuilder: (context, index) {
-              final employee = employees[index];
-              return _EmployeeTile(employee: employee);
-            },
-          );
-        },
-        loading: () => const Center(
-            child: CircularProgressIndicator(color: Colors.teal)),
-        error: (e, st) => Center(
-            child: Text('Error: $e',
-                style: const TextStyle(color: Colors.redAccent))),
+                  if (filtered.isEmpty) {
+                    return ListView( // Use ListView for RefreshIndicator to work
+                      children: [
+                        SizedBox(height: MediaQuery.of(context).size.height * 0.3),
+                        const Center(
+                          child: Text('No matching persons found.',
+                              style: TextStyle(color: Colors.white54)),
+                        ),
+                      ],
+                    );
+                  }
+
+                  return ListView.builder(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    itemCount: filtered.length,
+                    itemBuilder: (context, index) {
+                      final employee = filtered[index];
+                      return _EmployeeTile(employee: employee);
+                    },
+                  );
+                },
+                loading: () => const Center(child: CircularProgressIndicator(color: Colors.teal)),
+                error: (e, st) => Center(child: Text('Error: $e', style: const TextStyle(color: Colors.redAccent))),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
