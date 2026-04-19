@@ -10,6 +10,7 @@ enum LivenessState {
   performingChallenge, // Current active randomized challenge
   passed, // Liveness confirmed
   failed, // Multiple failed attempts detected
+  spoofDetected, // Explicit AI detection of photo/screen
 }
 
 /// Types of liveness challenges
@@ -50,7 +51,7 @@ class LivenessService {
   static const double _stabilityDelta = 25.0;
 
   // Thresholds
-  static const double _eyeClosedThreshold = 0.43;
+  static const double _eyeClosedThreshold = 0.45;
   static const int _minFramesForAction = 3;
   static const double _mouthOpenThreshold = 0.08;
   static const double _smileThreshold = 0.70;
@@ -95,8 +96,9 @@ class LivenessService {
         return _state;
       }
 
-      // Stability met -> Select random challenges
-      _startRandomChallenges();
+      // Stability met -> Start challenges immediately
+      startChallenges();
+      return _state;
     }
 
     // Step 1: Execute Challenges
@@ -144,13 +146,17 @@ class LivenessService {
     return _state;
   }
 
-  void _startRandomChallenges() {
+  void startChallenges() {
     final random = math.Random();
     _activeChallenges = List.from(_challengePool)..shuffle(random);
     _activeChallenges = _activeChallenges.take(2).toList(); // User requested 2
     _currentChallengeIndex = 0;
     _state = LivenessState.performingChallenge;
     debugPrint('[Liveness] Strategy: ${_activeChallenges.join(' -> ')}');
+  }
+
+  void setSpoofDetected() {
+    _state = LivenessState.spoofDetected;
   }
 
   bool _checkBlink(Face face) {

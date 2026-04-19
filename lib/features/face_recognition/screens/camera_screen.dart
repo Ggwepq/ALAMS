@@ -153,22 +153,47 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
       final prevState = livenessService.state;
       final livenessState = await livenessService.processFrame(inputImage);
       
-      // Update Providers
-      ref.read(livenessStateProvider.notifier).set(livenessState);
-      ref.read(currentChallengeProvider.notifier).set(livenessService.currentChallenge);
+        ref.read(livenessStateProvider.notifier).set(livenessState);
+        ref.read(currentChallengeProvider.notifier).set(livenessService.currentChallenge);
 
-      // Trigger Active Illumination (Flash) on transition to first challenge
-      if (prevState == LivenessState.lookStraight && livenessState == LivenessState.performingChallenge) {
-        if (mounted) setState(() => _isFlashing = true);
-        Future.delayed(const Duration(milliseconds: 150), () {
-          if (mounted) setState(() => _isFlashing = false);
+        // --- Parallel AI Anti-Spoofing Guard ---
+        final spoofService = ref.read(spoofDetectorServiceProvider);
+        
+        // HEARTBEAT LOG: Confirming frame is being sent to the AI Guard
+        // debugPrint('[Camera] Sending frame to SpoofWorker...');
+
+        spoofService.detectSpoof(image).then((result) {
+          if (!mounted) return;
+          
+          // Update real-time label provider
+          ref.read(spoofResultProvider.notifier).set(result);
+
+          if (!result.isReal) {
+            debugPrint('[Camera] AI DETECTED SPOOF (conf: ${result.confidence})');
+            livenessService.setSpoofDetected();
+            ref.read(livenessStateProvider.notifier).set(livenessService.state);
+            
+            // Trigger red flash and cooldown
+            if (mounted) setState(() => _isFlashing = true);
+            Future.delayed(const Duration(milliseconds: 300), () {
+              if (mounted) setState(() => _isFlashing = false);
+            });
+
+            _nextAvailableRecognition = DateTime.now().add(const Duration(seconds: 5));
+            Future.delayed(const Duration(seconds: 5), () {
+              if (mounted) {
+                livenessService.reset();
+                ref.read(livenessStateProvider.notifier).set(LivenessState.waiting);
+                ref.read(spoofResultProvider.notifier).set(null);
+              }
+            });
+          }
         });
-      }
 
-      // Only proceed to recognition after liveness passes
-      if (livenessState != LivenessState.passed) return;
+        // Only proceed if liveness passed
+        if (livenessState != LivenessState.passed) return;
 
-      // Step 2: Preprocessed Image (In Isolate to fix lag)
+        // Step 2: Recognition (Now optimized with One-Pass)
       final faceService = ref.read(faceRecognitionServiceProvider);
       final preprocessed = await compute(FaceRecognitionService.preprocessCameraImage, image);
       if (preprocessed == null) {
@@ -415,6 +440,14 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
             child: _LivenessStatusBadge(state: livenessState),
           ),
 
+          // ── Real-Time Authenticity Label ──────────────────────────
+          Positioned(
+            top: 100,
+            left: 0,
+            right: 0,
+            child: _AuthenticityLabel(),
+          ),
+
           // ── Bottom Logo & Hidden Admin Link ───────────────────────
           Positioned(
             bottom: 40,
@@ -466,6 +499,7 @@ class _FaceOvalPainter extends CustomPainter {
     final Color strokeColor = switch (livenessState) {
       LivenessState.passed => Colors.tealAccent,
       LivenessState.lookStraight => Colors.orangeAccent,
+      LivenessState.spoofDetected => Colors.redAccent,
       LivenessState.performingChallenge => Colors.white,
       _ => Colors.white38,
     };
@@ -517,6 +551,11 @@ class _LivenessStatusBadge extends ConsumerWidget {
       LivenessState.failed => (
           'Liveness failed – try again',
           Icons.warning_amber_rounded,
+          Colors.redAccent
+        ),
+      LivenessState.spoofDetected => (
+          'SPOOF DETECTED! Use a real face.',
+          Icons.gpp_bad_rounded,
           Colors.redAccent
         ),
     };
@@ -577,5 +616,50 @@ class _LivenessStatusBadge extends ConsumerWidget {
         ),
       null => ('Wait...', Icons.hourglass_empty, Colors.white60),
     };
+  }
+}
+
+// ─── Real-Time Authenticity Label ──────────────────────────────────────────
+
+class _AuthenticityLabel extends ConsumerWidget {
+  const _AuthenticityLabel();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final spoofResult = ref.watch(spoofResultProvider);
+    if (spoofResult == null) return const SizedBox.shrink();
+
+    final isReal = spoofResult.isReal;
+    final color = isReal ? Colors.greenAccent : Colors.redAccent;
+    final text = isReal ? 'AUTHENTIC FACE' : 'SPOOF DETECTED';
+    final icon = isReal ? Icons.verified_user_rounded : Icons.gpp_bad_rounded;
+
+    return Center(
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 300),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: Colors.black45,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: color.withAlpha(150), width: 1),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: color, size: 14),
+            const SizedBox(width: 6),
+            Text(
+              text,
+              style: TextStyle(
+                color: color,
+                fontSize: 10,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 1.2,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
