@@ -5,36 +5,30 @@ import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 
 /// State of the liveness check.
 enum LivenessState {
-  waiting,        // Waiting for face to appear
-  lookStraight,   // Step 0: Face stability check
+  waiting, // Waiting for face to appear
+  lookStraight, // Step 0: Face stability check
   performingChallenge, // Current active randomized challenge
-  passed,         // Liveness confirmed
-  failed,         // Multiple failed attempts detected
+  passed, // Liveness confirmed
+  failed, // Multiple failed attempts detected
 }
 
 /// Types of liveness challenges
-enum LivenessChallenge {
-  blink,
-  mouthOpen,
-  turnLeft,
-  turnRight,
-  smile,
-}
+enum LivenessChallenge { blink, mouthOpen, turnLeft, turnRight, smile }
 
 class LivenessService {
   final FaceDetector _detector = FaceDetector(
     options: FaceDetectorOptions(
-      enableClassification: true,    // eye-open, smiling
-      enableLandmarks: true,         
-      enableContours: true,          
-      enableTracking: true,          
+      enableClassification: true, // eye-open, smiling
+      enableLandmarks: true,
+      enableContours: true,
+      enableTracking: true,
       minFaceSize: 0.15,
       performanceMode: FaceDetectorMode.fast,
     ),
   );
 
   LivenessState _state = LivenessState.waiting;
-  
+
   // Challenge Management
   final List<LivenessChallenge> _challengePool = [
     LivenessChallenge.blink,
@@ -43,29 +37,31 @@ class LivenessService {
     LivenessChallenge.turnRight,
     LivenessChallenge.smile,
   ];
-  
+
   List<LivenessChallenge> _activeChallenges = [];
   int _currentChallengeIndex = 0;
-  
+
   // Internal counters/state
   int _actionFrames = 0;
   int _stabilityFrames = 0;
   Rect? _lastFaceRect;
-  
+
   static const int _minStabilityFrames = 5;
   static const double _stabilityDelta = 25.0;
 
   // Thresholds
-  static const double _eyeClosedThreshold = 0.40;
+  static const double _eyeClosedThreshold = 0.43;
   static const int _minFramesForAction = 3;
   static const double _mouthOpenThreshold = 0.08;
   static const double _smileThreshold = 0.70;
   static const double _turnAngleThreshold = 25.0; // Degrees
 
   LivenessState get state => _state;
-  LivenessChallenge? get currentChallenge => 
-    (_state == LivenessState.performingChallenge && _activeChallenges.isNotEmpty) 
-    ? _activeChallenges[_currentChallengeIndex] : null;
+  LivenessChallenge? get currentChallenge =>
+      (_state == LivenessState.performingChallenge &&
+          _activeChallenges.isNotEmpty)
+      ? _activeChallenges[_currentChallengeIndex]
+      : null;
 
   /// Process a single [InputImage] frame.
   Future<LivenessState> processFrame(InputImage inputImage) async {
@@ -80,11 +76,12 @@ class LivenessService {
     final face = faces.reduce((a, b) => _faceArea(a) > _faceArea(b) ? a : b);
 
     // Step 0: Stability & Selection
-    if (_state == LivenessState.waiting || _state == LivenessState.lookStraight) {
+    if (_state == LivenessState.waiting ||
+        _state == LivenessState.lookStraight) {
       if (_lastFaceRect != null) {
         final dx = (face.boundingBox.left - _lastFaceRect!.left).abs();
         final dy = (face.boundingBox.top - _lastFaceRect!.top).abs();
-        
+
         if (dx < _stabilityDelta && dy < _stabilityDelta) {
           _stabilityFrames++;
         } else {
@@ -92,7 +89,7 @@ class LivenessService {
         }
       }
       _lastFaceRect = face.boundingBox;
-      
+
       if (_stabilityFrames < _minStabilityFrames) {
         _state = LivenessState.lookStraight;
         return _state;
@@ -110,7 +107,7 @@ class LivenessService {
       // Passive Check: Geometric Depth & Consistency
       if (!_checkPassiveLiveness(face)) {
         debugPrint('[Liveness] Passive check failed - suspected spoof.');
-        // We don't fail immediately to avoid false positives, 
+        // We don't fail immediately to avoid false positives,
         // but we could track this.
       }
 
@@ -137,7 +134,7 @@ class LivenessService {
         _actionFrames = 0; // Reset for next challenge
         _currentChallengeIndex++;
         debugPrint('[Liveness] Challenge completed: $challenge');
-        
+
         if (_currentChallengeIndex >= _activeChallenges.length) {
           _state = LivenessState.passed;
         }
@@ -157,7 +154,10 @@ class LivenessService {
   }
 
   bool _checkBlink(Face face) {
-    final avgOpen = ((face.leftEyeOpenProbability ?? 1.0) + (face.rightEyeOpenProbability ?? 1.0)) / 2.0;
+    final avgOpen =
+        ((face.leftEyeOpenProbability ?? 1.0) +
+            (face.rightEyeOpenProbability ?? 1.0)) /
+        2.0;
     if (avgOpen < _eyeClosedThreshold) {
       _actionFrames++;
       return _actionFrames >= _minFramesForAction;
@@ -170,11 +170,17 @@ class LivenessService {
   bool _checkMouthOpen(Face face) {
     final upperLip = face.contours[FaceContourType.upperLipBottom]?.points;
     final lowerLip = face.contours[FaceContourType.lowerLipTop]?.points;
-    if (upperLip == null || lowerLip == null || upperLip.isEmpty || lowerLip.isEmpty) return false;
+    if (upperLip == null ||
+        lowerLip == null ||
+        upperLip.isEmpty ||
+        lowerLip.isEmpty)
+      return false;
 
-    final gap = (lowerLip[lowerLip.length ~/ 2].y - upperLip[upperLip.length ~/ 2].y).abs();
+    final gap =
+        (lowerLip[lowerLip.length ~/ 2].y - upperLip[upperLip.length ~/ 2].y)
+            .abs();
     final isOpened = (gap / face.boundingBox.height) > _mouthOpenThreshold;
-    
+
     if (isOpened) {
       _actionFrames++;
       return _actionFrames >= _minFramesForAction;
@@ -188,7 +194,8 @@ class LivenessService {
   bool _checkPassiveLiveness(Face face) {
     // 1. Staticness check (prevents perfectly static images/frozen video)
     if (_lastFaceRect != null) {
-      final areaDelta = (_faceArea(face) - _faceAreaFromRect(_lastFaceRect!)).abs();
+      final areaDelta = (_faceArea(face) - _faceAreaFromRect(_lastFaceRect!))
+          .abs();
       if (areaDelta < 0.001) {
         // Face is too static, could be a photo or frozen video
         return false;
@@ -197,11 +204,11 @@ class LivenessService {
 
     // 2. 3D Perspective Check (Simplified moiré/depth)
     // As face turns (eulerY), the bounding box width should shrink.
-    // In a 2D photo being turned, the scaling is linear. 
-    // This is a complex check, so we mostly rely on Euler angles from ML Kit 
+    // In a 2D photo being turned, the scaling is linear.
+    // This is a complex check, so we mostly rely on Euler angles from ML Kit
     // which are harder to fake on a flat surface.
-    
-    return true; 
+
+    return true;
   }
 
   double _faceAreaFromRect(Rect rect) => rect.width * rect.height;

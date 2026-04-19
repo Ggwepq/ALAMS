@@ -192,9 +192,9 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
                   .map((e) => MapEntry(e.name, e.facialEmbedding))
                   .toList();
                   
-              final result = FaceRecognitionService.findBestMatch(embedding, knownFaces, threshold: 0.35);
-              if (result.isRecognized) {
-                final bool? continueReg = await _showDuplicateFaceWarning(result.label);
+              final duplicateName = FaceRecognitionService.checkDuplicateEmbedding(embedding, knownFaces);
+              if (duplicateName != null) {
+                final bool? continueReg = await _showDuplicateFaceWarning(duplicateName);
                 if (continueReg != true) {
                   _cameraController?.stopImageStream();
                   if (mounted) {
@@ -540,7 +540,14 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
                     onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
                   ),
                 ),
-                validator: (v) => (v == null || v.trim().length < 4) ? 'Password must be 4+ characters' : null,
+                validator: (v) {
+                  if (v == null || v.trim().isEmpty) return 'Password is required';
+                  if (v.length < 8) return 'Password must be at least 8 characters';
+                  if (!v.contains(RegExp(r'[A-Z]'))) return 'Must contain an uppercase letter';
+                  if (!v.contains(RegExp(r'[0-9]'))) return 'Must contain a number';
+                  if (!v.contains(RegExp(r'[!@#\$%^&*(),.?":{}|<>_\-]'))) return 'Must contain a special character';
+                  return null;
+                },
               ),
             ],
 

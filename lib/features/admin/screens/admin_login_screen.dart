@@ -15,6 +15,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
   bool _isLoading = false;
   bool _obscurePassword = true;
   String? _errorMessage;
+  bool _isLockedOut = false;
 
   Future<void> _login() async {
     if (!_formKey.currentState!.validate()) return;
@@ -25,22 +26,39 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
     });
 
     try {
-      final db = DatabaseService.instance;
-      final admin = await db.validateAdmin(
+      final result = await DatabaseService.instance.validateAdmin(
         _usernameController.text.trim(),
-        _passwordController.text.trim(),
+        _passwordController.text,   // No .trim() — spaces in passwords are valid
       );
 
       if (!mounted) return;
 
-      if (admin != null) {
-        // Success
-        Navigator.pushReplacementNamed(context, '/admin_dashboard');
-      } else {
-        setState(() => _errorMessage = 'Invalid username or password');
+      switch (result.status) {
+        case AdminLoginStatus.success:
+          Navigator.pushReplacementNamed(context, '/admin_dashboard');
+          break;
+
+        case AdminLoginStatus.lockedOut:
+          setState(() {
+            _isLockedOut = true;
+            _errorMessage =
+                'Account temporarily locked after too many failed attempts.\n'
+                'Please try again in ${result.remainingMinutes} minutes.';
+          });
+          break;
+
+        case AdminLoginStatus.failure:
+          final remaining = result.attemptsRemaining;
+          setState(() {
+            _isLockedOut = false;
+            _errorMessage = remaining != null && remaining > 0
+                ? 'Invalid username or password. $remaining attempt${remaining == 1 ? '' : 's'} remaining before lockout.'
+                : 'Invalid username or password.';
+          });
+          break;
       }
     } catch (e) {
-      setState(() => _errorMessage = 'Login error: $e');
+      if (mounted) setState(() => _errorMessage = 'Login error. Please try again.');
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -74,7 +92,13 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const SizedBox(height: 20),
-                const Icon(Icons.admin_panel_settings_rounded, color: Colors.tealAccent, size: 64),
+                Icon(
+                  _isLockedOut
+                      ? Icons.lock_rounded
+                      : Icons.admin_panel_settings_rounded,
+                  color: _isLockedOut ? Colors.redAccent : Colors.tealAccent,
+                  size: 64,
+                ),
                 const SizedBox(height: 24),
                 const Text(
                   'Administrator Access',
@@ -92,6 +116,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
                 TextFormField(
                   controller: _usernameController,
                   style: const TextStyle(color: Colors.white),
+                  enabled: !_isLockedOut,
                   decoration: _buildInputDecoration('Enter username', Icons.person_outline),
                   validator: (v) => (v == null || v.isEmpty) ? 'Required' : null,
                 ),
@@ -103,15 +128,17 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
                   controller: _passwordController,
                   obscureText: _obscurePassword,
                   style: const TextStyle(color: Colors.white),
+                  enabled: !_isLockedOut,
                   decoration: _buildInputDecoration(
-                    'Enter password', 
+                    'Enter password',
                     Icons.lock_outline,
                     suffixIcon: IconButton(
                       icon: Icon(
                         _obscurePassword ? Icons.visibility_off : Icons.visibility,
                         color: Colors.white38,
                       ),
-                      onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+                      onPressed: () =>
+                          setState(() => _obscurePassword = !_obscurePassword),
                     ),
                   ),
                   validator: (v) => (v == null || v.isEmpty) ? 'Required' : null,
@@ -127,10 +154,20 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
                       border: Border.all(color: Colors.redAccent.withOpacity(0.3)),
                     ),
                     child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Icon(Icons.error_outline, color: Colors.redAccent, size: 20),
+                        Icon(
+                          _isLockedOut ? Icons.lock_rounded : Icons.error_outline,
+                          color: Colors.redAccent,
+                          size: 20,
+                        ),
                         const SizedBox(width: 12),
-                        Text(_errorMessage!, style: const TextStyle(color: Colors.redAccent, fontSize: 14)),
+                        Expanded(
+                          child: Text(
+                            _errorMessage!,
+                            style: const TextStyle(color: Colors.redAccent, fontSize: 14),
+                          ),
+                        ),
                       ],
                     ),
                   ),
@@ -138,14 +175,13 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
 
                 const SizedBox(height: 48),
 
-                // Login Button
                 SizedBox(
                   width: double.infinity,
                   height: 64,
                   child: ElevatedButton(
-                    onPressed: _isLoading ? null : _login,
+                    onPressed: _isLoading || _isLockedOut ? null : _login,
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.teal,
+                      backgroundColor: _isLockedOut ? Colors.grey[800] : Colors.teal,
                       foregroundColor: Colors.white,
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
                       elevation: 8,
@@ -153,7 +189,10 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
                     ),
                     child: _isLoading
                         ? const CircularProgressIndicator(color: Colors.white)
-                        : const Text('Login', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                        : Text(
+                            _isLockedOut ? 'Account Locked' : 'Login',
+                            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                          ),
                   ),
                 ),
               ],
@@ -167,11 +206,14 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
   Widget _buildFieldLabel(String label) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8.0),
-      child: Text(label, style: const TextStyle(color: Colors.white70, fontSize: 14, fontWeight: FontWeight.w600)),
+      child: Text(label,
+          style: const TextStyle(
+              color: Colors.white70, fontSize: 14, fontWeight: FontWeight.w600)),
     );
   }
 
-  InputDecoration _buildInputDecoration(String hint, IconData icon, {Widget? suffixIcon}) {
+  InputDecoration _buildInputDecoration(String hint, IconData icon,
+      {Widget? suffixIcon}) {
     return InputDecoration(
       hintText: hint,
       hintStyle: const TextStyle(color: Colors.white24),
@@ -179,9 +221,13 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
       suffixIcon: suffixIcon,
       filled: true,
       fillColor: Colors.white.withOpacity(0.05),
-      border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
-      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: const BorderSide(color: Colors.teal, width: 1.5)),
-      contentPadding: const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
+      border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
+      focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16),
+          borderSide: const BorderSide(color: Colors.teal, width: 1.5)),
+      contentPadding:
+          const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
     );
   }
 }
