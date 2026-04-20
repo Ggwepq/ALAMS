@@ -50,7 +50,7 @@ class LivenessService {
   static const double _stabilityDelta = 25.0;
 
   // Thresholds
-  static const double _eyeClosedThreshold = 0.43;
+  static const double _eyeClosedThreshold = 0.45;
   static const int _minFramesForAction = 3;
   static const double _mouthOpenThreshold = 0.08;
   static const double _smileThreshold = 0.70;
