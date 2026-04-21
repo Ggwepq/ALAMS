@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart'; 
 
 import 'features/onboarding/screens/onboarding_screen.dart';
 import 'features/attendance/screens/selection_screen.dart';
@@ -23,6 +24,12 @@ final RouteObserver<ModalRoute<void>> routeObserver = RouteObserver<ModalRoute<v
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+
+  await Supabase.initialize(
+    url: 'https://niotcpxrbkihswyieiyh.supabase.co',
+    anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5pb3RjcHhyYmtpaHN3eWllaXloIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY3NzE3MTgsImV4cCI6MjA5MjM0NzcxOH0.RzZ1XMEvZvuKQKlSBnyNqvmOHbWz27JhU6AGrkdJW9s', // paste your NEW key after regenerating
+  );
 
   // Force portrait mode only — attendance kiosks should not rotate
   await SystemChrome.setPreferredOrientations([
