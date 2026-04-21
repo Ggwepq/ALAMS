@@ -14,6 +14,7 @@ import 'features/registration/screens/registration_screen.dart';
 import 'features/reports/screens/reports_screen.dart';
 import 'core/database/database_service.dart';
 import 'core/models/employee.dart';
+import 'core/services/sync_service.dart';
 
 import 'features/admin/screens/admin_login_screen.dart';
 import 'features/admin/screens/department_management_screen.dart';
@@ -30,6 +31,9 @@ void main() async {
     url: 'https://niotcpxrbkihswyieiyh.supabase.co',
     anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5pb3RjcHhyYmtpaHN3eWllaXloIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY3NzE3MTgsImV4cCI6MjA5MjM0NzcxOH0.RzZ1XMEvZvuKQKlSBnyNqvmOHbWz27JhU6AGrkdJW9s', // paste your NEW key after regenerating
   );
+
+  SyncService.instance.init();
+
 
   // Force portrait mode only — attendance kiosks should not rotate
   await SystemChrome.setPreferredOrientations([

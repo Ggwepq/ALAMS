@@ -4,6 +4,7 @@ import '../models/employee.dart';
 import '../models/attendance.dart';
 import '../models/department.dart';
 import '../utils/crypto_utils.dart';
+import '../services/sync_service.dart';
 
 class DatabaseService {
   static final DatabaseService instance = DatabaseService._init();
@@ -23,10 +24,9 @@ class DatabaseService {
 
     final db = await openDatabase(
       path,
-      version: 7,
+      version: 8, // bumped from 7 to 8
       onCreate: _createDB,
       onOpen: (db) async {
-        // Enforce FK constraints on every connection open.
         await db.execute('PRAGMA foreign_keys = ON');
       },
       onUpgrade: (db, oldVersion, newVersion) async {
@@ -68,15 +68,25 @@ class DatabaseService {
           await db.insert('system_settings', {'key': 'work_end',   'value': '17:00'});
         }
         if (oldVersion < 7) {
-          // Migrate plaintext passwords -> PBKDF2 hashes.
           await _migratePasswordsToHashed(db);
-          // Brute-force tracking table.
           await db.execute('''
             CREATE TABLE IF NOT EXISTS login_attempts (
               id        INTEGER PRIMARY KEY AUTOINCREMENT,
               username  TEXT    NOT NULL,
               timestamp TEXT    NOT NULL,
               succeeded INTEGER NOT NULL DEFAULT 0
+            )
+          ''');
+        }
+        if (oldVersion < 8) {
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS sync_queue (
+              id         INTEGER PRIMARY KEY AUTOINCREMENT,
+              table_name TEXT    NOT NULL,
+              operation  TEXT    NOT NULL,
+              record_id  INTEGER NOT NULL,
+              payload    TEXT    NOT NULL,
+              created_at TEXT    NOT NULL
             )
           ''');
         }
@@ -144,6 +154,17 @@ class DatabaseService {
         succeeded INTEGER NOT NULL DEFAULT 0
       )
     ''');
+
+    await db.execute('''
+      CREATE TABLE sync_queue (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        table_name TEXT    NOT NULL,
+        operation  TEXT    NOT NULL,
+        record_id  INTEGER NOT NULL,
+        payload    TEXT    NOT NULL,
+        created_at TEXT    NOT NULL
+      )
+    ''');
   }
 
   // ─── Password migration helper ──────────────────────────────────────────────
@@ -156,8 +177,6 @@ class DatabaseService {
     for (final row in admins) {
       final raw = row['password'] as String? ?? '';
       if (raw.isEmpty || CryptoUtils.isHashed(raw)) continue;
-      
-      // Perform hashing in background to avoid blocking the DB init thread
       final hashed = await CryptoUtils.hashPasswordAsync(raw);
       await db.update(
         'employees',
@@ -171,14 +190,29 @@ class DatabaseService {
   // ─── Employees ──────────────────────────────────────────────────────────────
 
   Future<int> insertEmployee(Employee employee) async {
-    final db = await instance.database;
+    final db  = await instance.database;
     final map = employee.toMap();
     if (employee.isAdmin && employee.password != null && employee.password!.isNotEmpty) {
       if (!CryptoUtils.isHashed(employee.password!)) {
         map['password'] = await CryptoUtils.hashPasswordAsync(employee.password!);
       }
     }
-    return await db.insert('employees', map);
+    final newId = await db.insert('employees', map);
+
+    // Strip sensitive fields before syncing
+    final syncMap = Map<String, dynamic>.from(map)
+      ..remove('password')
+      ..remove('facial_embedding')
+      ..['id'] = newId;
+
+    await SyncService.instance.enqueue(
+      tableName: 'employees',
+      operation: 'INSERT',
+      recordId:  newId,
+      payload:   syncMap,
+    );
+
+    return newId;
   }
 
   Future<List<Employee>> getAllEmployees() async {
@@ -197,35 +231,72 @@ class DatabaseService {
 
   Future<int> deleteEmployee(int id) async {
     final db = await instance.database;
-    return await db.update('employees', {'is_deleted': 1}, where: 'id = ?', whereArgs: [id]);
+    final result = await db.update(
+      'employees',
+      {'is_deleted': 1},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+
+    await SyncService.instance.enqueue(
+      tableName: 'employees',
+      operation: 'DELETE',
+      recordId:  id,
+      payload:   {'id': id, 'is_deleted': 1},
+    );
+
+    return result;
   }
 
   Future<int> updateEmployee(Employee employee) async {
-    final db = await instance.database;
+    final db  = await instance.database;
     final map = employee.toMap();
     if (employee.isAdmin && employee.password != null && employee.password!.isNotEmpty) {
       if (!CryptoUtils.isHashed(employee.password!)) {
         map['password'] = await CryptoUtils.hashPasswordAsync(employee.password!);
       }
     }
-    return await db.update('employees', map, where: 'id = ?', whereArgs: [employee.id]);
+    final result = await db.update(
+      'employees',
+      map,
+      where: 'id = ?',
+      whereArgs: [employee.id],
+    );
+
+    // Strip sensitive fields before syncing
+    final syncMap = Map<String, dynamic>.from(map)
+      ..remove('password')
+      ..remove('facial_embedding');
+
+    await SyncService.instance.enqueue(
+      tableName: 'employees',
+      operation: 'UPDATE',
+      recordId:  employee.id!,
+      payload:   syncMap,
+    );
+
+    return result;
   }
 
   Future<bool> hasAdmin() async {
     final db = await instance.database;
-    final result = await db.rawQuery('SELECT COUNT(*) FROM employees WHERE is_admin = 1');
+    final result = await db.rawQuery(
+      'SELECT COUNT(*) FROM employees WHERE is_admin = 1',
+    );
     return (Sqflite.firstIntValue(result) ?? 0) > 0;
   }
 
   Future<int> getEmployeeCount() async {
     final db = await instance.database;
-    final result = await db.rawQuery('SELECT COUNT(*) FROM employees WHERE is_admin = 0 AND is_deleted = 0');
+    final result = await db.rawQuery(
+      'SELECT COUNT(*) FROM employees WHERE is_admin = 0 AND is_deleted = 0',
+    );
     return Sqflite.firstIntValue(result) ?? 0;
   }
 
   // ─── Admin Login with Rate Limiting ─────────────────────────────────────────
 
-  static const int _maxFailedAttempts   = 5;
+  static const int _maxFailedAttempts    = 5;
   static const int _lockoutWindowMinutes = 15;
 
   Future<int> _recentFailedAttempts(Database db, String username) async {
@@ -239,7 +310,8 @@ class DatabaseService {
     return Sqflite.firstIntValue(result) ?? 0;
   }
 
-  Future<void> _recordLoginAttempt(Database db, String username, bool succeeded) async {
+  Future<void> _recordLoginAttempt(
+      Database db, String username, bool succeeded) async {
     await db.insert('login_attempts', {
       'username':  username.toLowerCase(),
       'timestamp': DateTime.now().toIso8601String(),
@@ -247,18 +319,16 @@ class DatabaseService {
     });
   }
 
-  /// Validates admin credentials.
-  /// Returns an [AdminLoginResult] — success, failure (with remaining attempts), or lockout.
-  Future<AdminLoginResult> validateAdmin(String username, String password) async {
+  Future<AdminLoginResult> validateAdmin(
+      String username, String password) async {
     final db = await instance.database;
 
-    // 1. Lockout check before touching credentials.
     final failCount = await _recentFailedAttempts(db, username);
     if (failCount >= _maxFailedAttempts) {
-      return AdminLoginResult.lockedOut(remainingMinutes: _lockoutWindowMinutes);
+      return AdminLoginResult.lockedOut(
+          remainingMinutes: _lockoutWindowMinutes);
     }
 
-    // 2. Look up by username only — never compare password in SQL.
     final rows = await db.query(
       'employees',
       where: 'username = ? AND is_admin = 1 AND is_deleted = 0',
@@ -267,20 +337,17 @@ class DatabaseService {
     );
 
     if (rows.isEmpty) {
-      // Still record the attempt to prevent user-enumeration timing attacks.
       await _recordLoginAttempt(db, username, false);
       return AdminLoginResult.failure();
     }
 
-    final row           = rows.first;
+    final row            = rows.first;
     final storedPassword = row['password'] as String? ?? '';
 
-    // 3. Verify in background Isolate with constant-time comparison.
     bool match;
     if (CryptoUtils.isHashed(storedPassword)) {
       match = await CryptoUtils.verifyPasswordAsync(password, storedPassword);
     } else {
-      // Legacy plaintext fallback — migrate immediately on successful match.
       match = (password == storedPassword);
       if (match) {
         final hashed = await CryptoUtils.hashPasswordAsync(password);
@@ -296,7 +363,8 @@ class DatabaseService {
     if (!match) {
       await _recordLoginAttempt(db, username, false);
       final remaining = _maxFailedAttempts - (failCount + 1);
-      return AdminLoginResult.failure(attemptsRemaining: remaining < 0 ? 0 : remaining);
+      return AdminLoginResult.failure(
+          attemptsRemaining: remaining < 0 ? 0 : remaining);
     }
 
     await _recordLoginAttempt(db, username, true);
@@ -308,46 +376,65 @@ class DatabaseService {
   Future<String> insertAttendance(Attendance attendance) async {
     final db = await instance.database;
 
-    final startRes = await db.query('system_settings', where: 'key = ?', whereArgs: ['work_start']);
-    final endRes   = await db.query('system_settings', where: 'key = ?', whereArgs: ['work_end']);
+    final startRes = await db.query('system_settings',
+        where: 'key = ?', whereArgs: ['work_start']);
+    final endRes = await db.query('system_settings',
+        where: 'key = ?', whereArgs: ['work_end']);
 
-    final workStartStr = startRes.isNotEmpty ? startRes.first['value'] as String : '08:00';
-    final workEndStr   = endRes.isNotEmpty   ? endRes.first['value']   as String : '17:00';
+    final workStartStr =
+        startRes.isNotEmpty ? startRes.first['value'] as String : '08:00';
+    final workEndStr =
+        endRes.isNotEmpty ? endRes.first['value'] as String : '17:00';
 
-    final ps = workStartStr.split(':');
-    final pe = workEndStr.split(':');
+    final ps     = workStartStr.split(':');
+    final pe     = workEndStr.split(':');
     final startH = int.parse(ps[0]), startM = int.parse(ps[1]);
     final endH   = int.parse(pe[0]), endM   = int.parse(pe[1]);
 
-    final now = DateTime.now();
+    final now         = DateTime.now();
     String finalStatus = attendance.status;
 
     if (attendance.type == 'IN') {
-      finalStatus = (now.hour < startH || (now.hour == startH && now.minute <= startM))
-          ? 'On Time' : 'Late';
+      finalStatus =
+          (now.hour < startH || (now.hour == startH && now.minute <= startM))
+              ? 'On Time'
+              : 'Late';
     } else if (attendance.type == 'OUT') {
-      finalStatus = (now.hour < endH || (now.hour == endH && now.minute < endM))
-          ? 'Early Out' : 'Regular Out';
+      finalStatus =
+          (now.hour < endH || (now.hour == endH && now.minute < endM))
+              ? 'Early Out'
+              : 'Regular Out';
     }
 
-    await db.insert('attendance', Attendance(
-      id: attendance.id,
+    final finalAttendance = Attendance(
+      id:         attendance.id,
       employeeId: attendance.employeeId,
-      timestamp: attendance.timestamp,
-      type: attendance.type,
-      status: finalStatus,
-    ).toMap());
+      timestamp:  attendance.timestamp,
+      type:       attendance.type,
+      status:     finalStatus,
+    );
+
+    final newId = await db.insert('attendance', finalAttendance.toMap());
+
+    await SyncService.instance.enqueue(
+      tableName: 'attendance',
+      operation: 'INSERT',
+      recordId:  newId,
+      payload:   {...finalAttendance.toMap(), 'id': newId},
+    );
 
     return finalStatus;
   }
 
   Future<List<Attendance>> getAttendanceLogs() async {
     final db = await instance.database;
-    final result = await db.query('attendance', orderBy: 'timestamp DESC');
+    final result =
+        await db.query('attendance', orderBy: 'timestamp DESC');
     return result.map((json) => Attendance.fromMap(json)).toList();
   }
 
-  Future<List<Map<String, dynamic>>> getAttendanceLogsWithNamesToday() async {
+  Future<List<Map<String, dynamic>>>
+      getAttendanceLogsWithNamesToday() async {
     final db    = await instance.database;
     final today = DateTime.now().toIso8601String().substring(0, 10);
     return await db.rawQuery('''
@@ -394,8 +481,10 @@ class DatabaseService {
   Future<Attendance?> getLastAttendanceForEmployee(int employeeId) async {
     final db = await instance.database;
     final result = await db.query('attendance',
-        where: 'employee_id = ?', whereArgs: [employeeId],
-        orderBy: 'timestamp DESC', limit: 1);
+        where:    'employee_id = ?',
+        whereArgs: [employeeId],
+        orderBy:  'timestamp DESC',
+        limit:    1);
     if (result.isEmpty) return null;
     return Attendance.fromMap(result.first);
   }
@@ -411,7 +500,8 @@ class DatabaseService {
     ''');
   }
 
-  Future<List<Map<String, dynamic>>> getAttendanceLogsForEmployee(int employeeId) async {
+  Future<List<Map<String, dynamic>>> getAttendanceLogsForEmployee(
+      int employeeId) async {
     final db = await instance.database;
     return await db.rawQuery('''
       SELECT a.id, a.employee_id, a.timestamp, a.type, e.name AS employee_name
@@ -425,30 +515,63 @@ class DatabaseService {
   // ─── Departments ────────────────────────────────────────────────────────────
 
   Future<int> insertDepartment(Department dept) async {
-    final db = await instance.database;
-    return await db.insert('departments', dept.toMap(), conflictAlgorithm: ConflictAlgorithm.replace);
+    final db    = await instance.database;
+    final newId = await db.insert('departments', dept.toMap(),
+        conflictAlgorithm: ConflictAlgorithm.replace);
+
+    await SyncService.instance.enqueue(
+      tableName: 'departments',
+      operation: 'INSERT',
+      recordId:  newId,
+      payload:   {...dept.toMap(), 'id': newId},
+    );
+
+    return newId;
   }
 
   Future<List<Department>> getAllDepartments() async {
     final db = await instance.database;
-    return (await db.query('departments')).map((j) => Department.fromMap(j)).toList();
+    return (await db.query('departments'))
+        .map((j) => Department.fromMap(j))
+        .toList();
   }
 
   Future<int> deleteDepartment(int id) async {
-    final db = await instance.database;
-    return await db.delete('departments', where: 'id = ?', whereArgs: [id]);
+    final db     = await instance.database;
+    final result = await db.delete('departments',
+        where: 'id = ?', whereArgs: [id]);
+
+    await SyncService.instance.enqueue(
+      tableName: 'departments',
+      operation: 'DELETE',
+      recordId:  id,
+      payload:   {'id': id},
+    );
+
+    return result;
   }
 
   Future<int> updateDepartment(Department dept) async {
-    final db = await instance.database;
-    return await db.update('departments', dept.toMap(), where: 'id = ?', whereArgs: [dept.id]);
+    final db     = await instance.database;
+    final result = await db.update('departments', dept.toMap(),
+        where: 'id = ?', whereArgs: [dept.id]);
+
+    await SyncService.instance.enqueue(
+      tableName: 'departments',
+      operation: 'UPDATE',
+      recordId:  dept.id!,
+      payload:   dept.toMap(),
+    );
+
+    return result;
   }
 
   // ─── Settings ───────────────────────────────────────────────────────────────
 
   Future<String> getSetting(String key, String defaultValue) async {
-    final db = await instance.database;
-    final res = await db.query('system_settings', where: 'key = ?', whereArgs: [key]);
+    final db  = await instance.database;
+    final res = await db.query('system_settings',
+        where: 'key = ?', whereArgs: [key]);
     if (res.isEmpty) return defaultValue;
     return res.first['value'] as String;
   }
@@ -457,6 +580,13 @@ class DatabaseService {
     final db = await instance.database;
     await db.insert('system_settings', {'key': key, 'value': value},
         conflictAlgorithm: ConflictAlgorithm.replace);
+
+    await SyncService.instance.enqueue(
+      tableName: 'system_settings',
+      operation: 'UPDATE',
+      recordId:  0,
+      payload:   {'key': key, 'value': value},
+    );
   }
 }
 
@@ -481,10 +611,14 @@ class AdminLoginResult {
       AdminLoginResult._(status: AdminLoginStatus.success, employee: e);
 
   factory AdminLoginResult.failure({int? attemptsRemaining}) =>
-      AdminLoginResult._(status: AdminLoginStatus.failure, attemptsRemaining: attemptsRemaining);
+      AdminLoginResult._(
+          status: AdminLoginStatus.failure,
+          attemptsRemaining: attemptsRemaining);
 
   factory AdminLoginResult.lockedOut({required int remainingMinutes}) =>
-      AdminLoginResult._(status: AdminLoginStatus.lockedOut, remainingMinutes: remainingMinutes);
+      AdminLoginResult._(
+          status: AdminLoginStatus.lockedOut,
+          remainingMinutes: remainingMinutes);
 
   bool get isSuccess => status == AdminLoginStatus.success;
 }
