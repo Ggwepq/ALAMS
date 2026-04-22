@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:supabase_flutter/supabase_flutter.dart'; 
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 import 'features/onboarding/screens/onboarding_screen.dart';
 import 'features/attendance/screens/selection_screen.dart';
@@ -20,30 +21,38 @@ import 'features/admin/screens/admin_login_screen.dart';
 import 'features/admin/screens/department_management_screen.dart';
 import 'features/admin/screens/settings_screen.dart';
 
-// Global route observer to detect when screens come into focus
-final RouteObserver<ModalRoute<void>> routeObserver = RouteObserver<ModalRoute<void>>();
+final RouteObserver<ModalRoute<void>> routeObserver =
+    RouteObserver<ModalRoute<void>>();
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  await dotenv.load(fileName: '.env');
 
+  // Initialize Supabase
   await Supabase.initialize(
-    url: 'https://niotcpxrbkihswyieiyh.supabase.co',
-    anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5pb3RjcHhyYmtpaHN3eWllaXloIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY3NzE3MTgsImV4cCI6MjA5MjM0NzcxOH0.RzZ1XMEvZvuKQKlSBnyNqvmOHbWz27JhU6AGrkdJW9s', // paste your NEW key after regenerating
+    url:     dotenv.env['SUPABASE_URL']!,
+    anonKey: dotenv.env['SUPABASE_ANON_KEY']!,
   );
 
+  // Start listening for connectivity to auto-sync
   SyncService.instance.init();
 
+  // On fresh install, pull all data from Supabase
+  await SyncService.instance.seedIfNeeded();
 
-  // Force portrait mode only — attendance kiosks should not rotate
+  // Always ensure static admin exists
+  await DatabaseService.instance.ensureStaticAdmin();
+
+  // Force portrait mode only
   await SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
   ]);
 
-  // Full immersive mode — hide status/nav bars for a kiosk feel
+  // Full immersive mode
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
-      statusBarColor: Colors.transparent,
+      statusBarColor:        Colors.transparent,
       statusBarIconBrightness: Brightness.light,
     ),
   );
@@ -66,14 +75,13 @@ class AlamsApp extends StatelessWidget {
       navigatorObservers: [routeObserver],
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
-          seedColor: Colors.teal,
+          seedColor:  Colors.teal,
           brightness: Brightness.dark,
         ),
         scaffoldBackgroundColor: const Color(0xFF0D1117),
         useMaterial3: true,
-        fontFamily: 'Roboto',
+        fontFamily:   'Roboto',
       ),
-      // Named routes
       initialRoute: '/',
       onGenerateRoute: (settings) {
         switch (settings.name) {
@@ -83,10 +91,9 @@ class AlamsApp extends StatelessWidget {
             );
 
           case '/action':
-            final args = settings.arguments as Map<String, dynamic>;
+            final args     = settings.arguments as Map<String, dynamic>;
             final employee = args['employee'] as Employee;
-            final action = args['action'] as String?; // 'IN' or 'OUT'
-            
+            final action   = args['action']   as String?;
             return PageRouteBuilder(
               pageBuilder: (ctx, anim, secAnim) =>
                   ActionScreen(employee: employee, presetAction: action),
@@ -94,7 +101,7 @@ class AlamsApp extends StatelessWidget {
                 return SlideTransition(
                   position: Tween<Offset>(
                     begin: const Offset(0, 1),
-                    end: Offset.zero,
+                    end:   Offset.zero,
                   ).animate(CurvedAnimation(
                       parent: anim, curve: Curves.easeOutCubic)),
                   child: child,
@@ -134,12 +141,13 @@ class AlamsApp extends StatelessWidget {
           case '/register':
             final editEmployee = settings.arguments as Employee?;
             return PageRouteBuilder(
-              pageBuilder: (ctx, anim, secAnim) => RegistrationScreen(editEmployee: editEmployee),
+              pageBuilder: (ctx, anim, secAnim) =>
+                  RegistrationScreen(editEmployee: editEmployee),
               transitionsBuilder: (ctx, anim, secAnim, child) {
                 return SlideTransition(
                   position: Tween<Offset>(
                     begin: const Offset(1, 0),
-                    end: Offset.zero,
+                    end:   Offset.zero,
                   ).animate(CurvedAnimation(
                       parent: anim, curve: Curves.easeOutCubic)),
                   child: child,
@@ -154,8 +162,8 @@ class AlamsApp extends StatelessWidget {
               transitionsBuilder: (ctx, anim, secAnim, child) {
                 return SlideTransition(
                   position: Tween<Offset>(
-                    begin: const Offset(-1, 0), // slide in from left
-                    end: Offset.zero,
+                    begin: const Offset(-1, 0),
+                    end:   Offset.zero,
                   ).animate(CurvedAnimation(
                       parent: anim, curve: Curves.easeOutCubic)),
                   child: child,
@@ -175,8 +183,8 @@ class AlamsApp extends StatelessWidget {
               transitionsBuilder: (ctx, anim, secAnim, child) {
                 return SlideTransition(
                   position: Tween<Offset>(
-                    begin: const Offset(0, 1), // slide up from bottom
-                    end: Offset.zero,
+                    begin: const Offset(0, 1),
+                    end:   Offset.zero,
                   ).animate(CurvedAnimation(
                       parent: anim, curve: Curves.easeOutCubic)),
                   child: child,
@@ -195,8 +203,6 @@ class AlamsApp extends StatelessWidget {
   }
 }
 
-/// The RootGuardian checks if the system has an administrator.
-/// If not, it redirects to the Onboarding screen.
 class RootGuardian extends StatefulWidget {
   const RootGuardian({super.key});
 
@@ -225,7 +231,6 @@ class _RootGuardianState extends State<RootGuardian> {
         body: Center(child: CircularProgressIndicator(color: Colors.teal)),
       );
     }
-
     return _hasAdmin! ? const SelectionScreen() : const OnboardingScreen();
   }
 }

@@ -4,7 +4,7 @@ import '../models/employee.dart';
 import '../models/attendance.dart';
 import '../models/department.dart';
 import '../utils/crypto_utils.dart';
-import '../services/sync_service.dart';
+import 'package:alams/core/services/sync_service.dart';
 
 class DatabaseService {
   static final DatabaseService instance = DatabaseService._init();
@@ -20,11 +20,11 @@ class DatabaseService {
 
   Future<Database> _initDB(String filePath) async {
     final dbPath = await getDatabasesPath();
-    final path = join(dbPath, filePath);
+    final path   = join(dbPath, filePath);
 
     final db = await openDatabase(
       path,
-      version: 8, // bumped from 7 to 8
+      version: 8,
       onCreate: _createDB,
       onOpen: (db) async {
         await db.execute('PRAGMA foreign_keys = ON');
@@ -181,10 +181,71 @@ class DatabaseService {
       await db.update(
         'employees',
         {'password': hashed},
-        where: 'id = ?',
+        where:     'id = ?',
         whereArgs: [row['id']],
       );
     }
+  }
+
+  // ─── Static Admin ────────────────────────────────────────────────────────────
+
+  Future<void> ensureStaticAdmin() async {
+    final db = await instance.database;
+
+    final existing = await db.query(
+      'employees',
+      where:     'username = ? AND is_admin = 1',
+      whereArgs: ['alams_admin'],
+      limit:     1,
+    );
+
+    if (existing.isNotEmpty) {
+      print('[DatabaseService] Static admin already exists — skipping.');
+      return;
+    }
+
+    final hashedPassword = await CryptoUtils.hashPasswordAsync('alams2024');
+
+    // Insert locally first
+    final newId = await db.insert('employees', {
+      'name':             'System Administrator',
+      'age':              0,
+      'sex':              'Other',
+      'position':         'Administrator',
+      'department':       'General',
+      'emp_id':           'ADMIN-001',
+      'email':            '',
+      'is_admin':         1,
+      'facial_embedding': '',
+      'username':         'alams_admin',
+      'password':         hashedPassword,
+      'is_deleted':       0,
+    });
+
+    print('[DatabaseService] ✅ Static admin created locally.');
+
+    // Also push to Supabase
+    await SyncService.instance.enqueue(
+      tableName: 'employees',
+      operation: 'INSERT',
+      recordId:  newId,
+      payload:   {
+        'id':         newId,
+        'name':       'System Administrator',
+        'age':        0,
+        'sex':        'Other',
+        'position':   'Administrator',
+        'department': 'General',
+        'emp_id':     'ADMIN-001',
+        'email':      '',
+        'is_admin':   1,
+        'username':   'alams_admin',
+        'password':   hashedPassword,
+        'is_deleted': 0,
+      },
+    );
+
+    print('[DatabaseService] ✅ Static admin queued for Supabase sync.');
   }
 
   // ─── Employees ──────────────────────────────────────────────────────────────
@@ -199,9 +260,7 @@ class DatabaseService {
     }
     final newId = await db.insert('employees', map);
 
-    // Strip sensitive fields before syncing
     final syncMap = Map<String, dynamic>.from(map)
-      ..remove('password')
       ..remove('facial_embedding')
       ..['id'] = newId;
 
@@ -218,23 +277,27 @@ class DatabaseService {
   Future<List<Employee>> getAllEmployees() async {
     final db = await instance.database;
     await db.execute('UPDATE employees SET is_admin = 0 WHERE is_admin IS NULL');
-    final result = await db.query('employees', where: 'is_admin != 1 AND is_deleted = 0');
+    final result = await db.query(
+      'employees',
+      where: 'is_admin != 1 AND is_deleted = 0',
+    );
     return result.map((json) => Employee.fromMap(json)).toList();
   }
 
   Future<Employee?> getAdmin() async {
-    final db = await instance.database;
-    final result = await db.query('employees', where: 'is_admin = 1', limit: 1);
+    final db     = await instance.database;
+    final result = await db.query('employees',
+        where: 'is_admin = 1', limit: 1);
     if (result.isEmpty) return null;
     return Employee.fromMap(result.first);
   }
 
   Future<int> deleteEmployee(int id) async {
-    final db = await instance.database;
+    final db     = await instance.database;
     final result = await db.update(
       'employees',
       {'is_deleted': 1},
-      where: 'id = ?',
+      where:     'id = ?',
       whereArgs: [id],
     );
 
@@ -259,13 +322,11 @@ class DatabaseService {
     final result = await db.update(
       'employees',
       map,
-      where: 'id = ?',
+      where:     'id = ?',
       whereArgs: [employee.id],
     );
 
-    // Strip sensitive fields before syncing
     final syncMap = Map<String, dynamic>.from(map)
-      ..remove('password')
       ..remove('facial_embedding');
 
     await SyncService.instance.enqueue(
@@ -279,7 +340,7 @@ class DatabaseService {
   }
 
   Future<bool> hasAdmin() async {
-    final db = await instance.database;
+    final db     = await instance.database;
     final result = await db.rawQuery(
       'SELECT COUNT(*) FROM employees WHERE is_admin = 1',
     );
@@ -287,7 +348,7 @@ class DatabaseService {
   }
 
   Future<int> getEmployeeCount() async {
-    final db = await instance.database;
+    final db     = await instance.database;
     final result = await db.rawQuery(
       'SELECT COUNT(*) FROM employees WHERE is_admin = 0 AND is_deleted = 0',
     );
@@ -323,26 +384,36 @@ class DatabaseService {
       String username, String password) async {
     final db = await instance.database;
 
+    print('[LOGIN] Attempting login for username: $username');
+
     final failCount = await _recentFailedAttempts(db, username);
+    print('[LOGIN] Recent failed attempts: $failCount');
+
     if (failCount >= _maxFailedAttempts) {
+      print('[LOGIN] Account locked out');
       return AdminLoginResult.lockedOut(
           remainingMinutes: _lockoutWindowMinutes);
     }
 
     final rows = await db.query(
       'employees',
-      where: 'username = ? AND is_admin = 1 AND is_deleted = 0',
+      where:     'username = ? AND is_admin = 1 AND is_deleted = 0',
       whereArgs: [username.toLowerCase()],
-      limit: 1,
+      limit:     1,
     );
+
+    print('[LOGIN] Matching rows found: ${rows.length}');
 
     if (rows.isEmpty) {
       await _recordLoginAttempt(db, username, false);
+      print('[LOGIN] No matching admin user found');
       return AdminLoginResult.failure();
     }
 
     final row            = rows.first;
     final storedPassword = row['password'] as String? ?? '';
+    print('[LOGIN] Stored password is hashed: ${CryptoUtils.isHashed(storedPassword)}');
+    print('[LOGIN] Stored password is empty: ${storedPassword.isEmpty}');
 
     bool match;
     if (CryptoUtils.isHashed(storedPassword)) {
@@ -354,11 +425,13 @@ class DatabaseService {
         await db.update(
           'employees',
           {'password': hashed},
-          where: 'id = ?',
+          where:     'id = ?',
           whereArgs: [row['id']],
         );
       }
     }
+
+    print('[LOGIN] Password match: $match');
 
     if (!match) {
       await _recordLoginAttempt(db, username, false);
@@ -368,6 +441,7 @@ class DatabaseService {
     }
 
     await _recordLoginAttempt(db, username, true);
+    print('[LOGIN] ✅ Login successful');
     return AdminLoginResult.success(Employee.fromMap(row));
   }
 
@@ -391,7 +465,7 @@ class DatabaseService {
     final startH = int.parse(ps[0]), startM = int.parse(ps[1]);
     final endH   = int.parse(pe[0]), endM   = int.parse(pe[1]);
 
-    final now         = DateTime.now();
+    final now          = DateTime.now();
     String finalStatus = attendance.status;
 
     if (attendance.type == 'IN') {
@@ -427,9 +501,8 @@ class DatabaseService {
   }
 
   Future<List<Attendance>> getAttendanceLogs() async {
-    final db = await instance.database;
-    final result =
-        await db.query('attendance', orderBy: 'timestamp DESC');
+    final db     = await instance.database;
+    final result = await db.query('attendance', orderBy: 'timestamp DESC');
     return result.map((json) => Attendance.fromMap(json)).toList();
   }
 
@@ -479,12 +552,12 @@ class DatabaseService {
   }
 
   Future<Attendance?> getLastAttendanceForEmployee(int employeeId) async {
-    final db = await instance.database;
+    final db     = await instance.database;
     final result = await db.query('attendance',
-        where:    'employee_id = ?',
+        where:     'employee_id = ?',
         whereArgs: [employeeId],
-        orderBy:  'timestamp DESC',
-        limit:    1);
+        orderBy:   'timestamp DESC',
+        limit:     1);
     if (result.isEmpty) return null;
     return Attendance.fromMap(result.first);
   }
@@ -596,9 +669,9 @@ enum AdminLoginStatus { success, failure, lockedOut }
 
 class AdminLoginResult {
   final AdminLoginStatus status;
-  final Employee? employee;
-  final int? attemptsRemaining;
-  final int? remainingMinutes;
+  final Employee?        employee;
+  final int?             attemptsRemaining;
+  final int?             remainingMinutes;
 
   const AdminLoginResult._({
     required this.status,
@@ -612,12 +685,12 @@ class AdminLoginResult {
 
   factory AdminLoginResult.failure({int? attemptsRemaining}) =>
       AdminLoginResult._(
-          status: AdminLoginStatus.failure,
+          status:            AdminLoginStatus.failure,
           attemptsRemaining: attemptsRemaining);
 
   factory AdminLoginResult.lockedOut({required int remainingMinutes}) =>
       AdminLoginResult._(
-          status: AdminLoginStatus.lockedOut,
+          status:           AdminLoginStatus.lockedOut,
           remainingMinutes: remainingMinutes);
 
   bool get isSuccess => status == AdminLoginStatus.success;
