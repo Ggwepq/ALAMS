@@ -206,7 +206,6 @@ class DatabaseService {
 
     final hashedPassword = await CryptoUtils.hashPasswordAsync('alams2024');
 
-    // Insert locally first
     final newId = await db.insert('employees', {
       'name':             'System Administrator',
       'age':              0,
@@ -224,24 +223,24 @@ class DatabaseService {
 
     print('[DatabaseService] ✅ Static admin created locally.');
 
-    // Also push to Supabase
     await SyncService.instance.enqueue(
       tableName: 'employees',
       operation: 'INSERT',
       recordId:  newId,
       payload:   {
-        'id':         newId,
-        'name':       'System Administrator',
-        'age':        0,
-        'sex':        'Other',
-        'position':   'Administrator',
-        'department': 'General',
-        'emp_id':     'ADMIN-001',
-        'email':      '',
-        'is_admin':   1,
-        'username':   'alams_admin',
-        'password':   hashedPassword,
-        'is_deleted': 0,
+        'id':               newId,
+        'name':             'System Administrator',
+        'age':              0,
+        'sex':              'Other',
+        'position':         'Administrator',
+        'department':       'General',
+        'emp_id':           'ADMIN-001',
+        'email':            '',
+        'is_admin':         1,
+        'facial_embedding': '',
+        'username':         'alams_admin',
+        'password':         hashedPassword,
+        'is_deleted':       0,
       },
     );
 
@@ -260,9 +259,8 @@ class DatabaseService {
     }
     final newId = await db.insert('employees', map);
 
-    final syncMap = Map<String, dynamic>.from(map)
-      ..remove('facial_embedding')
-      ..['id'] = newId;
+    // ✅ facial_embedding is now included in sync
+    final syncMap = Map<String, dynamic>.from(map)..['id'] = newId;
 
     await SyncService.instance.enqueue(
       tableName: 'employees',
@@ -326,8 +324,8 @@ class DatabaseService {
       whereArgs: [employee.id],
     );
 
-    final syncMap = Map<String, dynamic>.from(map)
-      ..remove('facial_embedding');
+    // ✅ facial_embedding is now included in sync
+    final syncMap = Map<String, dynamic>.from(map);
 
     await SyncService.instance.enqueue(
       tableName: 'employees',

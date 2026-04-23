@@ -192,6 +192,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
       }
 
       final knownFaces = employees
+          .where((e) => e.facialEmbedding.isNotEmpty)
           .map((e) => MapEntry(e.name, e.facialEmbedding))
           .toList();
 
