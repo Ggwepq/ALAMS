@@ -12,7 +12,7 @@ import '../../../main.dart';
 import '../providers/face_recognition_provider.dart';
 import '../services/face_recognition_service.dart';
 import '../services/liveness_service.dart';
-import '../services/spoof_worker.dart';
+import '../models/spoof_result.dart';
 
 class CameraScreen extends ConsumerStatefulWidget {
   final String mode; // 'IN', 'OUT', or 'SCAN' (default)
@@ -38,7 +38,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
   static const _processingInterval = Duration(milliseconds: 400);
 
   // Speculative Security Scan (To reduce perceived latency to 0)
-  SpoofWorkerResult? _speculativeResult;
+  SpoofResult? _speculativeResult;
   bool _isSpeculating = false;
 
   @override
@@ -203,72 +203,35 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
       }
 
       // --- SPECULATIVE "HEAD START" SCAN ---
-      // We start the AI 30s scan the MOMENT the face is stable.
-      // By the time the user finishes challenges, the AI will be almost done!
+      // TEST MODE: Disabled speculative scanning for continuous real-time AI testing.
+      /*
       if (livenessState == LivenessState.lookStraight && !_isSpeculating && _speculativeResult == null && !spoofService.isBusy) {
-        _isSpeculating = true;
-        debugPrint('[Camera] Speculative AI scan started early to reach 0-perceived latency.');
-        spoofService.detectSpoof(
-          image, 
-          debugPath: _debugPath,
-          cropRect: livenessService.lastFaceRect,
-          sensorOrientation: _cameraController!.description.sensorOrientation,
-        ).then((res) {
-          _speculativeResult = res;
-          _isSpeculating = false;
-          debugPrint('[Camera] Speculative AI scan completed. Result cached.');
-        });
+        ... original speculative logic ...
       }
+      */
 
       // --- FINAL VERIFICATION GATE ---
       if (livenessState == LivenessState.passed) {
-        // If the early scan hasn't finished, wait for it or trigger a fresh one
-        SpoofWorkerResult? finalResult;
-        
-        if (_speculativeResult != null) {
-          finalResult = _speculativeResult;
-          debugPrint('[Camera] Using pre-cached AI result (Zero Latency hit!)');
-        } else if (_isSpeculating) {
-             // Still working? Show "Verifying..." and wait.
-             // (We'll just return and wait for the NEXT frame to find _speculativeResult != null)
-             return; 
-        } else if (!spoofService.isBusy) {
-             // No scan started yet? Start one now (Fallback)
-             debugPrint('[Camera] No early scan available. Starting post-liveness scan.');
-             finalResult = await spoofService.detectSpoof(
+        if (!spoofService.isBusy) {
+             SpoofResult finalResult = await spoofService.detectSpoof(
                image, 
                debugPath: _debugPath, 
                cropRect: livenessService.lastFaceRect,
                sensorOrientation: _cameraController!.description.sensorOrientation,
              );
-        } else {
-          return; // Busy, wait.
+             
+             if (mounted) ref.read(spoofResultProvider.notifier).set(finalResult);
+
+             if (finalResult.isReal) {
+               // Security Passed -> Proceed to recognition
+               _proceedToRecognition(image);
+             } else {
+               // Spoof detected -> Reset liveness to force a new check
+               livenessService.setSpoofDetected();
+               ref.read(livenessStateProvider.notifier).set(LivenessState.spoofDetected);
+             }
         }
-
-        if (!mounted) return;
-        ref.read(spoofResultProvider.notifier).set(finalResult);
-
-        if (!finalResult!.isReal) {
-          livenessService.setSpoofDetected();
-          ref.read(livenessStateProvider.notifier).set(livenessService.state);
-          
-          if (mounted) setState(() => _isFlashing = true);
-          Future.delayed(const Duration(milliseconds: 300), () => setState(() => _isFlashing = false));
-
-          _nextAvailableRecognition = DateTime.now().add(const Duration(seconds: 5));
-          _speculativeResult = null; // Clear
-          Future.delayed(const Duration(seconds: 5), () {
-            if (mounted) {
-              livenessService.reset();
-              ref.read(livenessStateProvider.notifier).set(LivenessState.waiting);
-              ref.read(spoofResultProvider.notifier).set(null);
-            }
-          });
-          return;
-        }
-
-        // Liveness passed + AI passed -> Proceed to Recognition
-        await _proceedToRecognition(image);
+        return;
       }
 
       // Removed redundant state record
@@ -537,6 +500,58 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
             left: 0,
             right: 0,
             child: _AuthenticityLabel(),
+          ),
+
+          // ── AI X-Ray Preview (Real-time facial crop) ────────────────
+          Positioned(
+            top: 110,
+            left: 20,
+            child: Consumer(
+              builder: (context, ref, _) {
+                final result = ref.watch(spoofResultProvider);
+                if (result?.faceCrop == null) return const SizedBox.shrink();
+                return Container(
+                  width: 90,
+                  height: 90,
+                  decoration: BoxDecoration(
+                    border: Border.all(color: Colors.tealAccent.withAlpha(150), width: 1.5),
+                    borderRadius: BorderRadius.circular(8),
+                    color: Colors.black,
+                    boxShadow: [
+                      BoxShadow(color: Colors.black.withAlpha(100), blurRadius: 8),
+                    ],
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(6),
+                    child: Stack(
+                      children: [
+                        Image.memory(
+                          result!.faceCrop!,
+                          width: 90,
+                          height: 90,
+                          fit: BoxFit.cover,
+                          gaplessPlayback: true,
+                        ),
+                        Positioned(
+                          top: 4, left: 4,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                            decoration: BoxDecoration(
+                              color: Colors.black54,
+                              borderRadius: BorderRadius.circular(2),
+                            ),
+                            child: const Text(
+                              'AI X-RAY',
+                              style: TextStyle(color: Colors.tealAccent, fontSize: 6, fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
           ),
 
           // ── Bottom Logo & Hidden Admin Link ───────────────────────
