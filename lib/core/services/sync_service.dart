@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../database/database_service.dart';
+import '../providers/sync_refresh_provider.dart';
 
 class SyncService {
   static final SyncService instance = SyncService._();
@@ -16,10 +18,27 @@ class SyncService {
   Timer?                      _periodicTimer;
   bool                        _isSyncing = false;
 
+  // ── Riverpod container — injected from main.dart after ProviderScope ──────
+  ProviderContainer? _container;
+
+  void setContainer(ProviderContainer container) {
+    _container = container;
+  }
+
+  void _triggerUIRefresh() {
+    final container = _container;
+    if (container == null) return;
+    try {
+      container.read(syncRefreshCountProvider.notifier).refresh();
+      print('[SyncService] 🔔 UI refresh triggered');
+    } catch (e) {
+      print('[SyncService] ⚠️ Could not trigger UI refresh: $e');
+    }
+  }
+
   // ── Init / Dispose ────────────────────────────────────────────────────────
 
   void init() {
-    // Push queued changes + pull latest whenever connectivity is restored
     _connectivitySub = Connectivity().onConnectivityChanged.listen((results) {
       final hasConnection = results.any((r) => r != ConnectivityResult.none);
       if (hasConnection) {
@@ -28,10 +47,8 @@ class SyncService {
       }
     });
 
-    // Real-time subscriptions for instant cross-device updates
     _subscribeRealtime();
 
-    // Fallback periodic pull every 30 seconds
     _periodicTimer = Timer.periodic(
       const Duration(seconds: 30),
       (_) => pullFromSupabase(),
@@ -62,6 +79,7 @@ class SyncService {
             callback: (payload) async {
               print('[SyncService] 📡 Realtime ${payload.eventType} on $table');
               await _applyRealtimeChange(table, payload);
+              _triggerUIRefresh();
             },
           )
           .subscribe();
@@ -140,7 +158,7 @@ class SyncService {
         );
       }
 
-      // ── Employees (with facial_embedding) ───────────────────────────────
+      // ── Employees ────────────────────────────────────────────────────────
       final employees = await _supabase.from('employees').select();
       for (final row in employees) {
         final localRow = await _remoteToLocal('employees', row, db);
@@ -177,6 +195,9 @@ class SyncService {
         );
       }
 
+      // Notify UI after full pull completes
+      _triggerUIRefresh();
+
       print('[SyncService] ✅ Pull complete — '
           'depts: ${departments.length}, '
           'employees: ${employees.length}, '
@@ -187,7 +208,7 @@ class SyncService {
     }
   }
 
-  // ── Seed on startup (always pulls, not just fresh install) ────────────────
+  // ── Seed on startup ───────────────────────────────────────────────────────
 
   Future<void> seedIfNeeded() async {
     try {
@@ -197,7 +218,6 @@ class SyncService {
         print('[SyncService] No internet — skipping seed.');
         return;
       }
-      // Always pull so every device stays up to date on startup
       await pullFromSupabase();
     } catch (e) {
       print('[SyncService] ❌ Seed failed: $e');
@@ -249,11 +269,11 @@ class SyncService {
         final queueId   = item['id']         as int;
         final table     = item['table_name'] as String;
         final operation = item['operation']  as String;
-        final payload   = jsonDecode(item['payload'] as String) as Map<String, dynamic>;
+        final payload   = jsonDecode(item['payload'] as String)
+            as Map<String, dynamic>;
 
         bool success = false;
         try {
-          // facial_embedding is now included in remote payload
           final remotePayload = Map<String, dynamic>.from(payload);
 
           switch (operation) {
@@ -270,13 +290,11 @@ class SyncService {
 
             case 'DELETE':
               if (table == 'employees') {
-                // Soft-delete — mark as deleted in Supabase
                 await _supabase
                     .from(table)
                     .update({'is_deleted': 1})
                     .eq('id', payload['id']);
               } else {
-                // Hard-delete for non-employee tables
                 await _supabase
                     .from(table)
                     .delete()
@@ -303,13 +321,6 @@ class SyncService {
 
   // ── Helpers ───────────────────────────────────────────────────────────────
 
-  /// Convert a Supabase row → local DB row.
-  ///
-  /// For employees: uses "longest wins" strategy for facial_embedding.
-  /// Whichever value has more data (remote or local) is kept.
-  /// This means:
-  ///   - A newly registered face on Device A propagates to Device B ✅
-  ///   - A blank/missing remote value never wipes a local embedding ✅
   Future<Map<String, dynamic>> _remoteToLocal(
     String table,
     Map<String, dynamic> row,
@@ -317,7 +328,6 @@ class SyncService {
   ) async {
     if (table != 'employees') return Map<String, dynamic>.from(row);
 
-    // Read existing local embedding (if any)
     final existing = await db.query(
       'employees',
       columns:   ['facial_embedding'],
@@ -349,7 +359,7 @@ class SyncService {
       'is_deleted':       row['is_deleted'] ?? 0,
       'username':         row['username'],
       'password':         row['password'],
-      'facial_embedding': bestEmbedding,   // ✅ synced across all devices
+      'facial_embedding': bestEmbedding,
     };
   }
 }

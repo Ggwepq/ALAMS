@@ -29,37 +29,39 @@ void main() async {
 
   await dotenv.load(fileName: '.env');
 
-  // Initialize Supabase
   await Supabase.initialize(
     url:     dotenv.env['SUPABASE_URL']!,
     anonKey: dotenv.env['SUPABASE_ANON_KEY']!,
   );
 
-  // Start listening for connectivity to auto-sync
+  // ✅ Create container BEFORE init() so setContainer is ready
+  final container = ProviderContainer();
+  SyncService.instance.setContainer(container);
+
+  // Start connectivity listener and real-time subscriptions
   SyncService.instance.init();
 
-  // On fresh install, pull all data from Supabase
+  // Pull latest data from Supabase on every startup
   await SyncService.instance.seedIfNeeded();
 
-  // Always ensure static admin exists
+  // Ensure static admin exists locally
   await DatabaseService.instance.ensureStaticAdmin();
 
-  // Force portrait mode only
   await SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
   ]);
 
-  // Full immersive mode
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
-      statusBarColor:        Colors.transparent,
+      statusBarColor:          Colors.transparent,
       statusBarIconBrightness: Brightness.light,
     ),
   );
 
   runApp(
-    const ProviderScope(
-      child: AlamsApp(),
+    UncontrolledProviderScope(
+      container: container,
+      child: const AlamsApp(),
     ),
   );
 }
