@@ -58,6 +58,7 @@ class LivenessService {
   static const double _turnAngleThreshold = 25.0; // Degrees
 
   LivenessState get state => _state;
+  Rect? get lastFaceRect => _lastFaceRect;
   LivenessChallenge? get currentChallenge =>
       (_state == LivenessState.performingChallenge &&
           _activeChallenges.isNotEmpty)
@@ -202,8 +203,8 @@ class LivenessService {
     if (_lastFaceRect != null) {
       final areaDelta = (_faceArea(face) - _faceAreaFromRect(_lastFaceRect!))
           .abs();
-      if (areaDelta < 0.001) {
-        // Face is too static, could be a photo or frozen video
+      if (areaDelta < 0.0001) {
+        // Face is extremely static, could be a photo or frozen video
         return false;
       }
     }

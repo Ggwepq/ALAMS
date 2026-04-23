@@ -1,10 +1,10 @@
-import 'dart:async';
-
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:path/path.dart' as p;
 
 import '../../../core/database/database_service.dart';
 import '../../../core/utils/image_utils.dart';
@@ -12,6 +12,7 @@ import '../../../main.dart';
 import '../providers/face_recognition_provider.dart';
 import '../services/face_recognition_service.dart';
 import '../services/liveness_service.dart';
+import '../services/spoof_worker.dart';
 
 class CameraScreen extends ConsumerStatefulWidget {
   final String mode; // 'IN', 'OUT', or 'SCAN' (default)
@@ -30,10 +31,15 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
   bool _isFlashing = false;
   FlashMode _flashMode = FlashMode.off;
   bool _isFlashSupported = false;
+  String? _debugPath;
 
   // Throttle: process one frame every 400ms to avoid overwhelming low-end devices.
   DateTime _lastProcessed = DateTime.fromMillisecondsSinceEpoch(0);
   static const _processingInterval = Duration(milliseconds: 400);
+
+  // Speculative Security Scan (To reduce perceived latency to 0)
+  SpoofWorkerResult? _speculativeResult;
+  bool _isSpeculating = false;
 
   @override
   void initState() {
@@ -81,6 +87,12 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
       if (cameras.isEmpty) {
         setState(() => _cameraErrorMessage = 'No cameras found on this device.');
         return;
+      }
+
+      // Initialize debug path for AI snapshot (using External Cache for easy adb pull)
+      final cacheDirs = await getExternalCacheDirectories();
+      if (cacheDirs != null && cacheDirs.isNotEmpty) {
+        _debugPath = p.join(cacheDirs.first.path, 'debug_ai_frame.jpg');
       }
 
       final frontCamera = cameras.firstWhere(
@@ -164,38 +176,6 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
     final spoofService = ref.read(spoofDetectorServiceProvider);
     final livenessService = ref.read(livenessServiceProvider);
 
-    // --- TRACK 1: FAST PATH (Security AI Guard) ---
-    // Runs at max frame rate (up to 30 FPS) until worker is busy.
-    if (!spoofService.isBusy) {
-      spoofService.detectSpoof(image).then((result) {
-        if (!mounted) return;
-        
-        // Detailed Confidence Log
-        debugPrint('[SpoofWorker] Result: ${result.isReal ? "REAL" : "SPOOF"} (conf: ${result.confidence.toStringAsFixed(3)})');
-        
-        ref.read(spoofResultProvider.notifier).set(result);
-        if (!result.isReal) {
-          livenessService.setSpoofDetected();
-          ref.read(livenessStateProvider.notifier).set(livenessService.state);
-
-          // Feedback: brief red flash and cooldown
-          if (mounted) setState(() => _isFlashing = true);
-          Future.delayed(const Duration(milliseconds: 300), () {
-            if (mounted) setState(() => _isFlashing = false);
-          });
-
-          _nextAvailableRecognition = DateTime.now().add(const Duration(seconds: 5));
-          Future.delayed(const Duration(seconds: 5), () {
-            if (mounted) {
-              livenessService.reset();
-              ref.read(livenessStateProvider.notifier).set(LivenessState.waiting);
-              ref.read(spoofResultProvider.notifier).set(null);
-            }
-          });
-        }
-      });
-    }
-
     // --- TRACK 2: THROTTLED PATH (Liveness & Recognition) ---
     if (_isProcessingFrame) return;
     final now = DateTime.now();
@@ -210,86 +190,144 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
       if (inputImage == null) return;
 
       // Step 1: Liveness check
-      final livenessService = ref.read(livenessServiceProvider);
-      final prevState = livenessService.state;
       final livenessState = await livenessService.processFrame(inputImage);
       
-        ref.read(livenessStateProvider.notifier).set(livenessState);
-        ref.read(currentChallengeProvider.notifier).set(livenessService.currentChallenge);
+      if (!mounted) return;
+      ref.read(livenessStateProvider.notifier).set(livenessState);
+      ref.read(currentChallengeProvider.notifier).set(livenessService.currentChallenge);
 
-        // Only proceed if liveness passed
-        if (livenessState != LivenessState.passed) return;
-
-        // Step 2: Recognition (Now optimized with One-Pass)
-      final faceService = ref.read(faceRecognitionServiceProvider);
-      final preprocessed = await compute(FaceRecognitionService.preprocessCameraImage, image);
-      if (preprocessed == null) {
-        livenessService.reset(); // Error, reset for safety
-        return;
+      // Auto-reset security cache if face is lost
+      if (livenessState == LivenessState.waiting) {
+        _speculativeResult = null;
+        ref.read(spoofResultProvider.notifier).set(null);
       }
 
-      // Step 3: Generate embedding (TFLite Inference usually runs on native worker)
-      final liveEmbedding = faceService.generateEmbedding(preprocessed);
-      if (liveEmbedding == null) {
-        livenessService.reset();
-        return;
+      // --- SPECULATIVE "HEAD START" SCAN ---
+      // We start the AI 30s scan the MOMENT the face is stable.
+      // By the time the user finishes challenges, the AI will be almost done!
+      if (livenessState == LivenessState.lookStraight && !_isSpeculating && _speculativeResult == null && !spoofService.isBusy) {
+        _isSpeculating = true;
+        debugPrint('[Camera] Speculative AI scan started early to reach 0-perceived latency.');
+        spoofService.detectSpoof(
+          image, 
+          debugPath: _debugPath,
+          cropRect: livenessService.lastFaceRect,
+          sensorOrientation: _cameraController!.description.sensorOrientation,
+        ).then((res) {
+          _speculativeResult = res;
+          _isSpeculating = false;
+          debugPrint('[Camera] Speculative AI scan completed. Result cached.');
+        });
       }
 
-      // Step 4: Match against DB (In Isolate if list is large)
-      final employees = await DatabaseService.instance.getAllEmployees();
-      if (employees.isEmpty) {
-        _showUnrecognizedBanner('No employees registered.');
-        livenessService.reset();
-        return;
-      }
-
-      final knownFaces = employees
-          .map((e) => MapEntry(e.name, e.facialEmbedding))
-          .toList();
-
-      // For extra smoothness, match in isolate too
-      final result = await compute((data) {
-        return FaceRecognitionService.findBestMatch(data.key, data.value);
-      }, MapEntry(liveEmbedding, knownFaces));
-
-      // Always reset liveness for the NEXT frame/attempt
-      livenessService.reset();
-
-      if (result.isRecognized) {
-        // Find the employee object from the recognized label (name)
-        final recognizedEmployee = employees.firstWhere(
-          (e) => e.name == result.label,
-          orElse: () => employees.first, // Should not happen if matched
-        );
-
-        ref.read(recognizedEmployeeProvider.notifier).set(recognizedEmployee.name);
+      // --- FINAL VERIFICATION GATE ---
+      if (livenessState == LivenessState.passed) {
+        // If the early scan hasn't finished, wait for it or trigger a fresh one
+        SpoofWorkerResult? finalResult;
         
-        // Pause stream and set navigation cooldown
-        await _cameraController?.stopImageStream();
-        _nextAvailableRecognition = DateTime.now().add(const Duration(seconds: 5));
-
-        if (mounted) {
-          // USER MODE: Standard check-in
-          final actionToPass = widget.mode == 'SCAN' ? null : widget.mode;
-          await Navigator.of(context).pushNamed('/action', arguments: {
-            'employee': recognizedEmployee,
-            'action': actionToPass,
-          });
-          
-          // RESTART stream when coming back
-          if (mounted && _cameraController != null) {
-            _cameraController!.startImageStream(_onCameraFrame);
-            ref.read(livenessStateProvider.notifier).set(LivenessState.waiting);
-          }
+        if (_speculativeResult != null) {
+          finalResult = _speculativeResult;
+          debugPrint('[Camera] Using pre-cached AI result (Zero Latency hit!)');
+        } else if (_isSpeculating) {
+             // Still working? Show "Verifying..." and wait.
+             // (We'll just return and wait for the NEXT frame to find _speculativeResult != null)
+             return; 
+        } else if (!spoofService.isBusy) {
+             // No scan started yet? Start one now (Fallback)
+             debugPrint('[Camera] No early scan available. Starting post-liveness scan.');
+             finalResult = await spoofService.detectSpoof(
+               image, 
+               debugPath: _debugPath, 
+               cropRect: livenessService.lastFaceRect,
+               sensorOrientation: _cameraController!.description.sensorOrientation,
+             );
+        } else {
+          return; // Busy, wait.
         }
-      } else {
-        ref.read(recognizedEmployeeProvider.notifier).set(null);
-        _showUnrecognizedBanner('Face not recognized.');
+
+        if (!mounted) return;
+        ref.read(spoofResultProvider.notifier).set(finalResult);
+
+        if (!finalResult!.isReal) {
+          livenessService.setSpoofDetected();
+          ref.read(livenessStateProvider.notifier).set(livenessService.state);
+          
+          if (mounted) setState(() => _isFlashing = true);
+          Future.delayed(const Duration(milliseconds: 300), () => setState(() => _isFlashing = false));
+
+          _nextAvailableRecognition = DateTime.now().add(const Duration(seconds: 5));
+          _speculativeResult = null; // Clear
+          Future.delayed(const Duration(seconds: 5), () {
+            if (mounted) {
+              livenessService.reset();
+              ref.read(livenessStateProvider.notifier).set(LivenessState.waiting);
+              ref.read(spoofResultProvider.notifier).set(null);
+            }
+          });
+          return;
+        }
+
+        // Liveness passed + AI passed -> Proceed to Recognition
+        await _proceedToRecognition(image);
       }
+
+      // Removed redundant state record
     } catch (e) {
       debugPrint('[Camera] Frame error: $e');
     } finally {
       _isProcessingFrame = false;
+    }
+  }
+
+  Future<void> _proceedToRecognition(CameraImage image) async {
+    final livenessService = ref.read(livenessServiceProvider);
+    final faceService = ref.read(faceRecognitionServiceProvider);
+    
+    final preprocessed = await compute(FaceRecognitionService.preprocessCameraImage, image);
+    if (preprocessed == null) return;
+
+    final liveEmbedding = faceService.generateEmbedding(preprocessed);
+    if (liveEmbedding == null) return;
+
+    final employees = await DatabaseService.instance.getAllEmployees();
+    if (employees.isEmpty) {
+      _showUnrecognizedBanner('No employees registered.');
+      livenessService.reset();
+      return;
+    }
+
+    final knownFaces = employees.map((e) => MapEntry(e.name, e.facialEmbedding)).toList();
+    final result = await compute((data) {
+      return FaceRecognitionService.findBestMatch(data.key, data.value);
+    }, MapEntry(liveEmbedding, knownFaces));
+
+    livenessService.reset();
+    _speculativeResult = null;
+
+    if (result.isRecognized) {
+      final recognizedEmployee = employees.firstWhere((e) => e.name == result.label);
+      ref.read(recognizedEmployeeProvider.notifier).set(recognizedEmployee.name);
+      
+      await _cameraController?.stopImageStream();
+      _nextAvailableRecognition = DateTime.now().add(const Duration(seconds: 5));
+
+      if (mounted) {
+        final actionToPass = widget.mode == 'SCAN' ? null : widget.mode;
+        await Navigator.of(context).pushNamed('/action', arguments: {
+          'employee': recognizedEmployee,
+          'action': actionToPass,
+        });
+        
+        if (mounted && _cameraController != null) {
+          _cameraController!.startImageStream(_onCameraFrame);
+          ref.read(livenessStateProvider.notifier).set(LivenessState.waiting);
+        }
+      }
+    } else {
+      _speculativeResult = null;
+      ref.read(spoofResultProvider.notifier).set(null);
+      ref.read(recognizedEmployeeProvider.notifier).set(null);
+      _showUnrecognizedBanner('Face not recognized.');
     }
   }
 
@@ -316,8 +354,6 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
       camera: _cameraController!.description,
     );
   }
-
-
 
   // ─── Build ───────────────────────────────────────────────────────────────
 
@@ -433,18 +469,37 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text(
-                          'ATTENDANCE',
-                          style: TextStyle(
-                            color: Colors.tealAccent,
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold,
-                            letterSpacing: 2,
-                          ),
+                        const Row(
+                          children: [
+                            Icon(Icons.fiber_manual_record, color: Colors.redAccent, size: 10),
+                            SizedBox(width: 4),
+                            Text(
+                              'LIVE FEED',
+                              style: TextStyle(
+                                color: Colors.redAccent,
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                                letterSpacing: 1.5,
+                              ),
+                            ),
+                          ],
                         ),
                         const Text(
-                          'ALAMS System',
-                          style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
+                          'ALAMS SECURITY',
+                          style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold, letterSpacing: 0.5),
+                        ),
+                        Container(
+                          margin: const EdgeInsets.only(top: 4),
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: Colors.teal.withAlpha(50),
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(color: Colors.tealAccent.withAlpha(100)),
+                          ),
+                          child: const Text(
+                            'SECURE AREA • AI ACTIVE',
+                            style: TextStyle(color: Colors.tealAccent, fontSize: 8, fontWeight: FontWeight.bold),
+                          ),
                         ),
                       ],
                     ),
@@ -473,7 +528,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
             bottom: 110,
             left: 24,
             right: 24,
-            child: _LivenessStatusBadge(state: livenessState),
+            child: _LivenessStatusBadge(state: livenessState, isSpeculating: _isSpeculating),
           ),
 
           // ── Real-Time Authenticity Label ──────────────────────────
@@ -561,7 +616,8 @@ class _FaceOvalPainter extends CustomPainter {
 
 class _LivenessStatusBadge extends ConsumerWidget {
   final LivenessState state;
-  const _LivenessStatusBadge({required this.state});
+  final bool isSpeculating;
+  const _LivenessStatusBadge({required this.state, required this.isSpeculating});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -604,19 +660,48 @@ class _LivenessStatusBadge extends ConsumerWidget {
           borderRadius: BorderRadius.circular(30),
           border: Border.all(color: color.withAlpha(100)),
         ),
-        child: Row(
+        child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, color: color, size: 20),
-            const SizedBox(width: 8),
-            Flexible(
-              child: Text(
-                text,
-                style: TextStyle(
-                    color: color, fontSize: 15, fontWeight: FontWeight.w600),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (isSpeculating && state == LivenessState.passed)
+                  const SizedBox(
+                    width: 16, height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.tealAccent),
+                  )
+                else
+                  Icon(icon, color: color, size: 20),
+                const SizedBox(width: 8),
+                Text(
+                  state == LivenessState.passed && isSpeculating ? 'HIGH-SECURITY AI SCAN' : text,
+                  style: TextStyle(
+                      color: color, fontSize: 15, fontWeight: FontWeight.bold),
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ),
+            if (state == LivenessState.passed && isSpeculating) ...[
+              const SizedBox(height: 12),
+              const Text(
+                'Identity Verified. Please hold perfectly still for 3D security check...',
+                style: TextStyle(color: Colors.white70, fontSize: 11),
                 textAlign: TextAlign.center,
               ),
-            ),
+              const SizedBox(height: 12),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(2),
+                child: const SizedBox(
+                  width: 180,
+                  height: 4,
+                  child: LinearProgressIndicator(
+                    backgroundColor: Colors.white10,
+                    color: Colors.tealAccent,
+                  ),
+                ),
+              ),
+            ],
           ],
         ),
       ),

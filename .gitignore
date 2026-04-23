@@ -11,6 +11,7 @@
 .svn/
 .swiftpm/
 migrate_working_dir/
+debug_full.jpg
 
 # IntelliJ related
 *.iml

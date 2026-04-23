@@ -31,9 +31,34 @@ class SpoofDetectorService {
   }
 
   /// Async detection that offloads everything to the background isolate.
-  Future<SpoofWorkerResult> detectSpoof(CameraImage image) async {
+  Future<SpoofWorkerResult> detectSpoof(CameraImage image, {String? debugPath, Rect? cropRect, int sensorOrientation = 0}) async {
     if (_worker == null) {
       return SpoofWorkerResult(isReal: true, confidence: 0.0);
+    }
+
+    List<double>? transformedRect;
+    if (cropRect != null) {
+      // Map UI Rect (Rotated) back to Sensor coordinates
+      // Logic: If sensor is 270 deg (Portrait Front Cam):
+      // UI Left -> Sensor Top
+      // UI Top -> Sensor (Width - Right)
+      if (sensorOrientation == 270) {
+        transformedRect = [
+          cropRect.top, // Sensor Left
+          image.height - cropRect.right, // Sensor Top
+          cropRect.bottom, // Sensor Right
+          image.height - cropRect.left, // Sensor Bottom
+        ];
+      } else if (sensorOrientation == 90) {
+        transformedRect = [
+          image.width - cropRect.bottom, // Sensor Left
+          cropRect.left, // Sensor Top
+          image.width - cropRect.top, // Sensor Right
+          cropRect.right, // Sensor Bottom
+        ];
+      } else {
+        transformedRect = [cropRect.left, cropRect.top, cropRect.right, cropRect.bottom];
+      }
     }
 
     // Convert planes to transferable ByteData
@@ -43,6 +68,8 @@ class SpoofDetectorService {
       height: image.height,
       bytesPerPixel: image.planes.map((p) => p.bytesPerPixel ?? 1).toList(),
       bytesPerRow: image.planes.map((p) => p.bytesPerRow).toList(),
+      debugPath: debugPath,
+      cropRect: transformedRect,
     );
 
     return await _worker!.detect(frameData);
