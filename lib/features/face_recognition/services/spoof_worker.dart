@@ -80,6 +80,8 @@ class SpoofWorker {
     }
   }
 
+  bool get isBusy => _pendingTask != null;
+
   /// Perform detection in the background isolate.
   Future<SpoofWorkerResult> detect(SpoofFrameData data) async {
     if (!_ready.isCompleted) {
@@ -118,7 +120,14 @@ class SpoofWorker {
     handshakePort.send(isolateReceivePort.sendPort);
 
     // Get the ReplyPort for the specific SpoofWorker instance
-    final replyPort = await isolateReceivePort.first as SendPort;
+    // Using StreamIterator to avoid "Stream already listened to" errors
+    final StreamIterator<dynamic> it = StreamIterator(isolateReceivePort);
+    
+    if (!await it.moveNext()) {
+      debugPrint('[SpoofWorker Isolate] Handshake failed: No ReplyPort received.');
+      return;
+    }
+    final replyPort = it.current as SendPort;
 
     Interpreter? interpreter;
     
@@ -131,13 +140,23 @@ class SpoofWorker {
         options: InterpreterOptions()..threads = 4,
       );
       
-      debugPrint('[SpoofWorker Isolate] Init: Model loaded successfully. Input: ${interpreter.getInputTensor(0).shape}');
+      // CRITICAL FIX: Explicitly allocate tensors to avoid "failed precondition" errors
+      interpreter.allocateTensors();
+      
+      final inputTensor = interpreter.getInputTensor(0);
+      final outputTensor = interpreter.getOutputTensor(0);
+      
+      debugPrint('[SpoofWorker Isolate] Init: Model ready.');
+      debugPrint('[SpoofWorker Isolate] Init: Expected Input Shape: ${inputTensor.shape} Type: ${inputTensor.type}');
+      debugPrint('[SpoofWorker Isolate] Init: Expected Output Shape: ${outputTensor.shape} Type: ${outputTensor.type}');
+      
       replyPort.send('ready');
     } catch (e) {
       debugPrint('[SpoofWorker Isolate] CRITICAL: Model load failed: $e');
     }
 
-    await for (final message in isolateReceivePort) {
+    while (await it.moveNext()) {
+      final message = it.current;
       if (message is! Map) continue;
       final cmd = message['cmd'] as SpoofCommand;
       
@@ -151,11 +170,16 @@ class SpoofWorker {
         
         try {
           // 1. Optimized One-Pass Preprocessing
-          final input = _preprocessOptimized(data);
+          final inputData = _preprocessOptimized(data);
           
-          // 2. Inference
+          // 2. Reshape and Inference (Explicitly match [1, 640, 640, 3])
+          // Standard Float32List can sometimes fail to map automatically in some tflite_flutter versions.
+          final input = inputData.reshape([1, 640, 640, 3]);
+          
           final output = List.filled(1 * 6 * 8400, 0.0).reshape([1, 6, 8400]);
-          interpreter.run(input, output);
+          
+          // Use runForMultipleInputs for stricter tensor handling
+          interpreter.runForMultipleInputs([input], {0: output});
           
           // 3. Post-processing
           final result = _parseYoloOutput(output[0]);

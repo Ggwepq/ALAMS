@@ -11,6 +11,7 @@ class SpoofDetectorService {
   SpoofDetectorService._init();
 
   bool get isLoaded => _worker != null;
+  bool get isBusy => _worker?.isBusy ?? false;
 
   /// Initialize the background worker by first loading the model data into memory.
   Future<void> loadModel() async {
@@ -20,7 +21,7 @@ class SpoofDetectorService {
       
       // Load the model as binary data first (Industry standard for reliable isolate loading)
       final data = await rootBundle.load('assets/models/anti-spoofing-model.tflite');
-      final buffer = data.buffer.asUint8List();
+      final buffer = data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
       
       _worker = await SpoofWorker.spawn(buffer);
       debugPrint('[SpoofDetector] Background worker initialized with model buffer.');

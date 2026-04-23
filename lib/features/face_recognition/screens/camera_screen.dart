@@ -28,6 +28,8 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
   String? _cameraErrorMessage;
   DateTime _nextAvailableRecognition = DateTime.now();
   bool _isFlashing = false;
+  FlashMode _flashMode = FlashMode.off;
+  bool _isFlashSupported = false;
 
   // Throttle: process one frame every 400ms to avoid overwhelming low-end devices.
   DateTime _lastProcessed = DateTime.fromMillisecondsSinceEpoch(0);
@@ -101,6 +103,17 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
         _cameraErrorMessage = null;
       });
 
+      // Reset AI result state for fresh session
+      ref.read(spoofResultProvider.notifier).set(null);
+
+      // Probe for flash support (no direct getter in camera package)
+      try {
+        await _cameraController!.setFlashMode(FlashMode.off);
+        _isFlashSupported = true;
+      } catch (_) {
+        _isFlashSupported = false;
+      }
+
       // Start streaming frames after model is loaded.
       _cameraController!.startImageStream(_onCameraFrame);
     } catch (e) {
@@ -117,6 +130,18 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
     }
   }
 
+  Future<void> _toggleFlash() async {
+    if (_cameraController == null || !_isFlashSupported) return;
+
+    final newMode = _flashMode == FlashMode.off ? FlashMode.torch : FlashMode.off;
+    try {
+      await _cameraController!.setFlashMode(newMode);
+      setState(() => _flashMode = newMode);
+    } catch (e) {
+      debugPrint('[Camera] Flash error: $e');
+    }
+  }
+
   // ─── Frame Processing Loop ───────────────────────────────────────────────
 
   void _onCameraFrame(CameraImage image) async {
@@ -127,20 +152,56 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
     // 2. Cooldown check
     if (DateTime.now().isBefore(_nextAvailableRecognition)) return;
 
-    if (_isProcessingFrame) return;
-    final now = DateTime.now();
-    if (now.difference(_lastProcessed) < _processingInterval) return;
-    _lastProcessed = now;
-
-    // Only proceed once TFLite model is loaded.
+    // Only proceed once TFLite models are loaded.
     final modelAsync = ref.read(modelLoadedProvider);
-    final modelLoaded = modelAsync.when(
+    final isAIReady = modelAsync.when(
       data: (v) => v,
       loading: () => false,
       error: (err, st) => false,
     );
-    if (!modelLoaded) return;
+    if (!isAIReady) return;
 
+    final spoofService = ref.read(spoofDetectorServiceProvider);
+    final livenessService = ref.read(livenessServiceProvider);
+
+    // --- TRACK 1: FAST PATH (Security AI Guard) ---
+    // Runs at max frame rate (up to 30 FPS) until worker is busy.
+    if (!spoofService.isBusy) {
+      spoofService.detectSpoof(image).then((result) {
+        if (!mounted) return;
+        
+        // Detailed Confidence Log
+        debugPrint('[SpoofWorker] Result: ${result.isReal ? "REAL" : "SPOOF"} (conf: ${result.confidence.toStringAsFixed(3)})');
+        
+        ref.read(spoofResultProvider.notifier).set(result);
+        if (!result.isReal) {
+          livenessService.setSpoofDetected();
+          ref.read(livenessStateProvider.notifier).set(livenessService.state);
+
+          // Feedback: brief red flash and cooldown
+          if (mounted) setState(() => _isFlashing = true);
+          Future.delayed(const Duration(milliseconds: 300), () {
+            if (mounted) setState(() => _isFlashing = false);
+          });
+
+          _nextAvailableRecognition = DateTime.now().add(const Duration(seconds: 5));
+          Future.delayed(const Duration(seconds: 5), () {
+            if (mounted) {
+              livenessService.reset();
+              ref.read(livenessStateProvider.notifier).set(LivenessState.waiting);
+              ref.read(spoofResultProvider.notifier).set(null);
+            }
+          });
+        }
+      });
+    }
+
+    // --- TRACK 2: THROTTLED PATH (Liveness & Recognition) ---
+    if (_isProcessingFrame) return;
+    final now = DateTime.now();
+    if (now.difference(_lastProcessed) < _processingInterval) return;
+
+    _lastProcessed = now;
     _isProcessingFrame = true;
 
     try {
@@ -155,40 +216,6 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
       
         ref.read(livenessStateProvider.notifier).set(livenessState);
         ref.read(currentChallengeProvider.notifier).set(livenessService.currentChallenge);
-
-        // --- Parallel AI Anti-Spoofing Guard ---
-        final spoofService = ref.read(spoofDetectorServiceProvider);
-        
-        // HEARTBEAT LOG: Confirming frame is being sent to the AI Guard
-        // debugPrint('[Camera] Sending frame to SpoofWorker...');
-
-        spoofService.detectSpoof(image).then((result) {
-          if (!mounted) return;
-          
-          // Update real-time label provider
-          ref.read(spoofResultProvider.notifier).set(result);
-
-          if (!result.isReal) {
-            debugPrint('[Camera] AI DETECTED SPOOF (conf: ${result.confidence})');
-            livenessService.setSpoofDetected();
-            ref.read(livenessStateProvider.notifier).set(livenessService.state);
-            
-            // Trigger red flash and cooldown
-            if (mounted) setState(() => _isFlashing = true);
-            Future.delayed(const Duration(milliseconds: 300), () {
-              if (mounted) setState(() => _isFlashing = false);
-            });
-
-            _nextAvailableRecognition = DateTime.now().add(const Duration(seconds: 5));
-            Future.delayed(const Duration(seconds: 5), () {
-              if (mounted) {
-                livenessService.reset();
-                ref.read(livenessStateProvider.notifier).set(LivenessState.waiting);
-                ref.read(spoofResultProvider.notifier).set(null);
-              }
-            });
-          }
-        });
 
         // Only proceed if liveness passed
         if (livenessState != LivenessState.passed) return;
@@ -422,6 +449,15 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
                       ],
                     ),
                     const Spacer(),
+                    if (_isFlashSupported)
+                      Padding(
+                        padding: const EdgeInsets.only(right: 8),
+                        child: IconButton.filledTonal(
+                          icon: Icon(_flashMode == FlashMode.torch ? Icons.flash_on : Icons.flash_off),
+                          onPressed: _toggleFlash,
+                          color: _flashMode == FlashMode.torch ? Colors.yellowAccent : Colors.white70,
+                        ),
+                      ),
                     IconButton.filledTonal(
                       icon: const Icon(Icons.close),
                       onPressed: () => Navigator.of(context).pop(),
@@ -627,7 +663,13 @@ class _AuthenticityLabel extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final spoofResult = ref.watch(spoofResultProvider);
-    if (spoofResult == null) return const SizedBox.shrink();
+    final livenessState = ref.watch(livenessStateProvider);
+    
+    // UI GATING: Only show the security label if a face is actually being scanned.
+    // This prevents "AUTHENTIC FACE" labels on empty rooms/backgrounds.
+    if (spoofResult == null || livenessState == LivenessState.waiting) {
+      return const SizedBox.shrink();
+    }
 
     final isReal = spoofResult.isReal;
     final color = isReal ? Colors.greenAccent : Colors.redAccent;
