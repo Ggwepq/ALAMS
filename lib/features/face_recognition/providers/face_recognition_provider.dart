@@ -1,6 +1,8 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../services/face_recognition_service.dart';
 import '../services/liveness_service.dart';
+import '../services/ncnn_anti_spoof_service.dart';
+import '../models/spoof_result.dart';
 
 /// Provider for the singleton FaceRecognitionService.
 final faceRecognitionServiceProvider = Provider<FaceRecognitionService>((ref) {
@@ -12,6 +14,13 @@ final faceRecognitionServiceProvider = Provider<FaceRecognitionService>((ref) {
 /// Provider for the LivenessService.
 final livenessServiceProvider = Provider<LivenessService>((ref) {
   final service = LivenessService();
+  ref.onDispose(service.dispose);
+  return service;
+});
+
+/// Provider for the native NCNN anti-spoofing engine.
+final spoofDetectorServiceProvider = Provider<NcnnAntiSpoofService>((ref) {
+  final service = NcnnAntiSpoofService.instance;
   ref.onDispose(service.dispose);
   return service;
 });
@@ -50,9 +59,25 @@ class _RecognizedEmployeeNotifier extends Notifier<String?> {
   void set(String? name) => state = name;
 }
 
-/// Whether the model is ready to run inference.
+/// Tracks the latest AI spoof detection result for real-time UI labeling.
+final spoofResultProvider =
+    NotifierProvider<_SpoofResultNotifier, SpoofResult?>(
+  _SpoofResultNotifier.new,
+);
+
+class _SpoofResultNotifier extends Notifier<SpoofResult?> {
+  @override
+  SpoofResult? build() => null;
+  void set(SpoofResult? value) => state = value;
+}
+
+/// Whether all AI models are ready to run inference.
 final modelLoadedProvider = FutureProvider<bool>((ref) async {
-  final service = ref.watch(faceRecognitionServiceProvider);
-  await service.loadModel();
-  return service.isLoaded;
+  final faceService = ref.watch(faceRecognitionServiceProvider);
+  final spoofService = ref.read(spoofDetectorServiceProvider);
+  
+  await faceService.loadModel();
+  await spoofService.loadModel();
+  
+  return faceService.isLoaded && spoofService.isLoaded;
 });
