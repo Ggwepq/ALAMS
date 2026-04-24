@@ -180,6 +180,9 @@ class AlamsApp extends StatelessWidget {
             );
         }
       },
+      builder: (context, child) {
+        return WatermarkOverlay(child: child!);
+      },
     );
   }
 }
@@ -217,4 +220,66 @@ class _RootGuardianState extends State<RootGuardian> {
 
     return _hasAdmin! ? const SelectionScreen() : const OnboardingScreen();
   }
+}
+
+class WatermarkOverlay extends StatelessWidget {
+  final Widget child;
+
+  const WatermarkOverlay({super.key, required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        child,
+        IgnorePointer(
+          child: CustomPaint(
+            painter: WatermarkPainter(),
+            size: Size.infinite,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class WatermarkPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    const text = 'ODDS';
+    const textStyle = TextStyle(
+      color: Color(0x80FFFFFF), // 50% opacity white
+      fontSize: 28,
+      fontWeight: FontWeight.bold,
+    );
+
+    final textPainter = TextPainter(
+      text: const TextSpan(text: text, style: textStyle),
+      textDirection: TextDirection.ltr,
+    );
+
+    textPainter.layout();
+
+    const double spacingX = 180.0;
+    const double spacingY = 180.0;
+
+    canvas.save();
+    
+    // Rotate around screen center to keep things centered
+    canvas.translate(size.width / 2, size.height / 2);
+    canvas.rotate(-0.5); 
+    canvas.translate(-size.width / 2, -size.height / 2);
+
+    // Large enough range to cover the screen even when rotated
+    for (double x = -size.width; x < size.width * 2; x += spacingX) {
+      for (double y = -size.height; y < size.height * 2; y += spacingY) {
+        textPainter.paint(canvas, Offset(x, y));
+      }
+    }
+
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
