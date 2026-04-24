@@ -49,44 +49,52 @@ class FaceRecognitionService {
 
   /// Converts a [CameraImage] (YUV420) to a 160×160 RGB image for FaceNet.
   /// Static so it can run inside a compute isolate.
+  /// Converts a [CameraImage] (YUV420) to a 160x160 [img.Image] in a single pass.
+  /// Static so it can run inside a compute isolate.
   static img.Image? preprocessCameraImage(CameraImage cameraImage) {
     try {
-      final planes = cameraImage.planes;
-      final yPlane = planes[0];
-      final uPlane = planes[1];
-      final vPlane = planes[2];
-
-      final width  = cameraImage.width;
+      final width = cameraImage.width;
       final height = cameraImage.height;
+      
+      final yPlane = cameraImage.planes[0];
+      final uPlane = cameraImage.planes[1];
+      final vPlane = cameraImage.planes[2];
 
-      final yBytes = yPlane.bytes;
-      final uBytes = uPlane.bytes;
-      final vBytes = vPlane.bytes;
+      final int yRowStride = yPlane.bytesPerRow;
+      final int uvRowStride = uPlane.bytesPerRow;
+      final int uvPixelStride = uPlane.bytesPerPixel ?? 1;
 
-      final yRowStride  = yPlane.bytesPerRow;
-      final uvRowStride = uPlane.bytesPerRow;
-      final uvPixelStride = uPlane.bytesPerPixel ?? 1;
+      // Target size for FaceNet
+      const int targetSize = 160;
+      final double scaleX = width / targetSize;
+      final double scaleY = height / targetSize;
 
-      final rawImage = img.Image(width: width, height: height);
+      final processedImage = img.Image(width: targetSize, height: targetSize);
 
-      for (int h = 0; h < height; h++) {
-        for (int w = 0; w < width; w++) {
-          final yIndex  = h * yRowStride + w;
-          final uvIndex = (h ~/ 2) * uvRowStride + (w ~/ 2) * uvPixelStride;
+      for (int h = 0; h < targetSize; h++) {
+        final int srcY = (h * scaleY).toInt();
+        for (int w = 0; w < targetSize; w++) {
+          final int srcX = (w * scaleX).toInt();
 
-          final yVal = yBytes[yIndex] & 0xFF;
-          final uVal = uBytes[uvIndex] & 0xFF;
-          final vVal = vBytes[uvIndex] & 0xFF;
+          final int yIndex = srcY * yRowStride + srcX;
+          final int uvIndex = (srcY ~/ 2) * uvRowStride + (srcX ~/ 2) * uvPixelStride;
+
+          // Extra safety check for bounds
+          if (yIndex >= yPlane.bytes.length || uvIndex >= uPlane.bytes.length) continue;
+
+          final int yVal = yPlane.bytes[yIndex] & 0xFF;
+          final int uVal = uPlane.bytes[uvIndex] & 0xFF;
+          final int vVal = vPlane.bytes[uvIndex] & 0xFF;
 
           final r = (yVal + 1.402 * (vVal - 128)).clamp(0, 255).toInt();
           final g = (yVal - 0.344136 * (uVal - 128) - 0.714136 * (vVal - 128)).clamp(0, 255).toInt();
           final b = (yVal + 1.772 * (uVal - 128)).clamp(0, 255).toInt();
 
-          rawImage.setPixelRgb(w, h, r, g, b);
+          processedImage.setPixelRgb(w, h, r, g, b);
         }
       }
 
-      return img.copyResize(rawImage, width: kInputSize, height: kInputSize);
+      return processedImage;
     } catch (e) {
       debugPrint('[FaceRecognition] Preprocessing error: $e');
       return null;
@@ -98,6 +106,9 @@ class FaceRecognitionService {
     if (!_isLoaded || _interpreter == null) return null;
 
     try {
+      // Ensure image is correct size for FaceNet
+      final resizedImage = img.copyResize(faceImage, width: kInputSize, height: kInputSize);
+      
       final outputShape = _interpreter!.getOutputTensor(0).shape;
       final embeddingSize = outputShape.last;
 
@@ -108,7 +119,7 @@ class FaceRecognitionService {
           (h) => List.generate(
             kInputSize,
             (w) {
-              final pixel = faceImage.getPixel(w, h);
+              final pixel = resizedImage.getPixel(w, h);
               return [
                 (pixel.r / 127.5) - 1.0,
                 (pixel.g / 127.5) - 1.0,
