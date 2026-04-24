@@ -40,6 +40,10 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
   // Speculative Security Scan (To reduce perceived latency to 0)
   SpoofResult? _speculativeResult;
   bool _isSpeculating = false;
+  
+  // High-Security Phase Tracking
+  DateTime? _realFaceFirstSeen;
+  bool _spoofWarningResetInProgress = false;
 
   @override
   void initState() {
@@ -176,70 +180,111 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
     final spoofService = ref.read(spoofDetectorServiceProvider);
     final livenessService = ref.read(livenessServiceProvider);
 
-    // --- TRACK 2: THROTTLED PATH (Liveness & Recognition) ---
-    if (_isProcessingFrame) return;
-    final now = DateTime.now();
-    if (now.difference(_lastProcessed) < _processingInterval) return;
+      // --- TRACK 2: THROTTLED PATH (Liveness & Recognition) ---
+      if (_isProcessingFrame) return;
+      final now = DateTime.now();
+      if (now.difference(_lastProcessed) < _processingInterval) return;
 
-    _lastProcessed = now;
-    _isProcessingFrame = true;
+      _lastProcessed = now;
+      _isProcessingFrame = true;
 
-    try {
-      // Convert CameraImage to InputImage for ML Kit
-      final inputImage = _buildInputImage(image);
-      if (inputImage == null) return;
+      try {
+        final inputImage = _buildInputImage(image);
+        if (inputImage == null) return;
 
-      // Step 1: Liveness check
-      final livenessState = await livenessService.processFrame(inputImage);
-      
-      if (!mounted) return;
-      ref.read(livenessStateProvider.notifier).set(livenessState);
-      ref.read(currentChallengeProvider.notifier).set(livenessService.currentChallenge);
+        // Step 1: Base Liveness Check (Face detection & positioning)
+        final livenessState = await livenessService.processFrame(inputImage);
+        
+        if (!mounted) return;
+        ref.read(livenessStateProvider.notifier).set(livenessState);
+        ref.read(currentChallengeProvider.notifier).set(livenessService.currentChallenge);
 
-      // Auto-reset security cache if face is lost
-      if (livenessState == LivenessState.waiting) {
-        _speculativeResult = null;
-        ref.read(spoofResultProvider.notifier).set(null);
-      }
-
-      // --- SPECULATIVE "HEAD START" SCAN ---
-      // TEST MODE: Disabled speculative scanning for continuous real-time AI testing.
-      /*
-      if (livenessState == LivenessState.lookStraight && !_isSpeculating && _speculativeResult == null && !spoofService.isBusy) {
-        ... original speculative logic ...
-      }
-      */
-
-      // --- FINAL VERIFICATION GATE ---
-      if (livenessState == LivenessState.passed) {
-        if (!spoofService.isBusy) {
-             SpoofResult finalResult = await spoofService.detectSpoof(
-               image, 
-               debugPath: _debugPath, 
-               cropRect: livenessService.lastFaceRect,
-               sensorOrientation: _cameraController!.description.sensorOrientation,
-             );
-             
-             if (mounted) ref.read(spoofResultProvider.notifier).set(finalResult);
-
-             if (finalResult.isReal) {
-               // Security Passed -> Proceed to recognition
-               _proceedToRecognition(image);
-             } else {
-               // Spoof detected -> Reset liveness to force a new check
-               livenessService.setSpoofDetected();
-               ref.read(livenessStateProvider.notifier).set(LivenessState.spoofDetected);
-             }
+        // RESET LOGIC: If no face detected, reset the authenticity timer
+        if (livenessState == LivenessState.waiting) {
+          _realFaceFirstSeen = null;
+          ref.read(spoofResultProvider.notifier).set(null);
+          return;
         }
-        return;
-      }
 
-      // Removed redundant state record
-    } catch (e) {
-      debugPrint('[Camera] Frame error: $e');
-    } finally {
-      _isProcessingFrame = false;
-    }
+        // --- TRACK 3: ANTI-SPOOFING ENFORCEMENT ---
+        // We run Anti-Spoofing in two conditions:
+        // 1. Before challenges start (Waiting for 2s of "REAL")
+        // 2. During challenges (Continuous monitoring)
+        
+        final isPerformingChallenge = livenessState == LivenessState.performingChallenge;
+        final isStabilityStage = livenessState == LivenessState.lookStraight;
+
+        if (isStabilityStage || isPerformingChallenge) {
+          if (!spoofService.isBusy) {
+            final spoofResult = await spoofService.detectSpoof(
+              image, 
+              debugPath: _debugPath, 
+              cropRect: livenessService.lastFaceRect,
+              sensorOrientation: _cameraController!.description.sensorOrientation,
+            );
+
+            if (!mounted) return;
+            ref.read(spoofResultProvider.notifier).set(spoofResult);
+
+            if (spoofResult.isReal) {
+              // FACE IS REAL
+              if (isStabilityStage) {
+                // Phase 1: Wait for 2 seconds of consistency
+                if (_realFaceFirstSeen == null) {
+                  _realFaceFirstSeen = DateTime.now();
+                } else {
+                  final durationReal = DateTime.now().difference(_realFaceFirstSeen!);
+                  if (durationReal.inSeconds >= 2) {
+                    // 2 Seconds reached! Start Liveness Challenges
+                    debugPrint('[Security] 2s Authenticity Window Met. Starting Challenges.');
+                    livenessService.startChallenges();
+                    ref.read(livenessStateProvider.notifier).set(livenessService.state);
+                    ref.read(currentChallengeProvider.notifier).set(livenessService.currentChallenge);
+                  }
+                }
+              }
+              // If already performing challenge, we just continue.
+            } else {
+              // FACE IS SPOOF
+              debugPrint('[Security] SPOOF DETECTED! Resetting process.');
+              _realFaceFirstSeen = null;
+              livenessService.reset();
+              livenessService.setSpoofDetected();
+              ref.read(livenessStateProvider.notifier).set(LivenessState.spoofDetected);
+              
+              // Trigger a longer warning period if needed
+              if (!_spoofWarningResetInProgress) {
+                 _spoofWarningResetInProgress = true;
+                 Future.delayed(const Duration(seconds: 3), () {
+                   if (mounted) {
+                     livenessService.reset();
+                     ref.read(livenessStateProvider.notifier).set(LivenessState.waiting);
+                     _spoofWarningResetInProgress = false;
+                   }
+                 });
+              }
+              return;
+            }
+          }
+        }
+
+        // --- FINAL RECOGNITION GATE ---
+        if (livenessState == LivenessState.passed) {
+          // Double check one last time that we haven't lost authenticity
+          final lastSpoof = ref.read(spoofResultProvider);
+          if (lastSpoof != null && lastSpoof.isReal) {
+             _proceedToRecognition(image);
+          } else {
+             livenessService.reset();
+             ref.read(livenessStateProvider.notifier).set(LivenessState.waiting);
+          }
+          return;
+        }
+      } catch (e) {
+        debugPrint('[Camera] Frame error: $e');
+      } finally {
+        _isProcessingFrame = false;
+      }
   }
 
   Future<void> _proceedToRecognition(CameraImage image) async {
@@ -645,8 +690,8 @@ class _LivenessStatusBadge extends ConsumerWidget {
           Colors.white70
         ),
       LivenessState.lookStraight => (
-          'Look straight at the camera',
-          Icons.center_focus_strong,
+          'Authenticating... Hold still',
+          Icons.security_rounded,
           Colors.orange
         ),
       LivenessState.performingChallenge => _getChallengeData(challenge),
@@ -661,7 +706,7 @@ class _LivenessStatusBadge extends ConsumerWidget {
           Colors.redAccent
         ),
       LivenessState.spoofDetected => (
-          'SPOOF DETECTED! Use a real face.',
+          'PLEASE USE A REAL FACE',
           Icons.gpp_bad_rounded,
           Colors.redAccent
         ),

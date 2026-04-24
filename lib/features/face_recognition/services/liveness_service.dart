@@ -102,8 +102,8 @@ class LivenessService {
         return _state;
       }
 
-      // Stability met -> Start challenges immediately
-      startChallenges();
+      // Stability met - Stay in lookStraight until externally triggered (after Anti-Spoofing check)
+      _state = LivenessState.lookStraight;
       return _state;
     }
 
