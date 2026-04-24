@@ -34,6 +34,8 @@ debug_full.jpg
 /build/
 /coverage/
 
+.env
+
 # Symbolication related
 app.*.symbols
 
