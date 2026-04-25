@@ -219,84 +219,37 @@ class DatabaseService {
   Future<void> ensureStaticAdmin() async {
     final db = await instance.database;
 
-    final existing = await db.query(
+    // 🛡️ Check if ANY administrator already exists in the database
+    final existingAdmins = await db.query(
       'employees',
-      where:     'username = ? AND is_admin = 1',
-      whereArgs: ['alams_admin'],
-      limit:     1,
+      where: 'is_admin = 1',
+      limit: 1,
     );
 
-    final hashedPassword = await CryptoUtils.hashPasswordAsync('Alams1234');
-
-    if (existing.isNotEmpty) {
-      final row = existing.first;
-      final storedPassword = row['password'] as String? ?? '';
-      
-      bool match = false;
-      if (CryptoUtils.isHashed(storedPassword)) {
-        match = await CryptoUtils.verifyPasswordAsync('Alams1234', storedPassword);
-      } else {
-        match = (storedPassword == 'Alams1234');
-      }
-
-      if (!match) {
-        await db.update(
-          'employees',
-          {'password': hashedPassword},
-          where:     'id = ?',
-          whereArgs: [row['id']],
-        );
-        
-        await SyncService.instance.enqueue(
-          tableName: 'employees',
-          operation: 'UPDATE',
-          recordId:  row['id'] as int,
-          payload:   {'id': row['id'], 'password': hashedPassword},
-        );
-        print('[DatabaseService] 🔄 Static admin password updated to Alams1234');
-      }
+    // If an admin already exists, we do nothing.
+    if (existingAdmins.isNotEmpty) {
+      print('[DatabaseService] ✅ Admin account already exists. Skipping seed.');
       return;
     }
 
-    final newId = await db.insert('employees', {
+    // Final safety check: Only insert if the table is truly empty of admins
+    final hashedPassword = await CryptoUtils.hashPasswordAsync('Admin1234.');
+
+    await db.insert('employees', {
       'name':             'System Administrator',
       'age':              0,
       'sex':              'Other',
-      'position':         'Administrator',
+      'position':         'Admin',
       'department':       'General',
       'emp_id':           'ADMIN-001',
-      'email':            '',
+      'email':            'admin@alams.com',
       'is_admin':         1,
-      'facial_embedding': '',
-      'username':         'alams_admin',
-      'password':         hashedPassword,
       'is_deleted':       0,
+      'username':         'admin',
+      'password':         hashedPassword,
+      'facial_embedding': '',
     });
-
-    print('[DatabaseService] ✅ Static admin created locally.');
-
-    await SyncService.instance.enqueue(
-      tableName: 'employees',
-      operation: 'INSERT',
-      recordId:  newId,
-      payload:   {
-        'id':               newId,
-        'name':             'System Administrator',
-        'age':              0,
-        'sex':              'Other',
-        'position':         'Administrator',
-        'department':       'General',
-        'emp_id':           'ADMIN-001',
-        'email':            '',
-        'is_admin':         1,
-        'facial_embedding': '',
-        'username':         'alams_admin',
-        'password':         hashedPassword,
-        'is_deleted':       0,
-      },
-    );
-
-    print('[DatabaseService] ✅ Static admin queued for Supabase sync.');
+    print('[DatabaseService] 🌱 Initial Master Admin seeded to local database.');
   }
 
   // ─── Employees ──────────────────────────────────────────────────────────────

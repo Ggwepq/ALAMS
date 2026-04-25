@@ -33,6 +33,7 @@ debug_full.jpg
 .pub/
 /build/
 /coverage/
+/scripts/
 
 .env
 
