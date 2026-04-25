@@ -224,7 +224,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
             final spoofResult = await spoofService.detectSpoof(
               image, 
               debugPath: _debugPath, 
-              cropRect: livenessService.lastFaceRect,
+              cropRect: _getOvalBufferRect(image.width, image.height),
               sensorOrientation: _cameraController!.description.sensorOrientation,
             );
 
