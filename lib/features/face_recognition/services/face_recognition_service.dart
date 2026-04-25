@@ -1,5 +1,7 @@
+import 'dart:io';
 import 'dart:math' as math;
 
+import 'dart:ui';
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:image/image.dart' as img;
@@ -47,12 +49,13 @@ class FaceRecognitionService {
 
   bool get isLoaded => _isLoaded;
 
-  /// Converts a [CameraImage] (YUV420) to a 160×160 RGB image for FaceNet.
+  /// Converts a [CameraImage] (YUV420) to a 160x160 [img.Image] isolated to the face area.
   /// Static so it can run inside a compute isolate.
-  /// Converts a [CameraImage] (YUV420) to a 160x160 [img.Image] in a single pass.
-  /// Static so it can run inside a compute isolate.
-  static img.Image? preprocessCameraImage(CameraImage cameraImage) {
+  static img.Image? preprocessCameraImage(Map<String, dynamic> args) {
     try {
+      final CameraImage cameraImage = args['image'];
+      final Rect? cropRect = args['cropRect'];
+
       final width = cameraImage.width;
       final height = cameraImage.height;
       
@@ -64,17 +67,32 @@ class FaceRecognitionService {
       final int uvRowStride = uPlane.bytesPerRow;
       final int uvPixelStride = uPlane.bytesPerPixel ?? 1;
 
+      // Define dimensions to scan
+      int startX = 0;
+      int startY = 0;
+      int scanWidth = width;
+      int scanHeight = height;
+
+      if (cropRect != null) {
+        // Use the provided rect directly (assumed to be in buffer coordinates)
+        startX = cropRect.left.toInt().clamp(0, width - 1);
+        startY = cropRect.top.toInt().clamp(0, height - 1);
+        scanWidth = cropRect.width.toInt().clamp(1, width - startX);
+        scanHeight = cropRect.height.toInt().clamp(1, height - startY);
+      }
+
       // Target size for FaceNet
       const int targetSize = 160;
-      final double scaleX = width / targetSize;
-      final double scaleY = height / targetSize;
+      final double scaleX = scanWidth / targetSize;
+      final double scaleY = scanHeight / targetSize;
+
 
       final processedImage = img.Image(width: targetSize, height: targetSize);
 
       for (int h = 0; h < targetSize; h++) {
-        final int srcY = (h * scaleY).toInt();
+        final int srcY = startY + (h * scaleY).toInt();
         for (int w = 0; w < targetSize; w++) {
-          final int srcX = (w * scaleX).toInt();
+          final int srcX = startX + (w * scaleX).toInt();
 
           final int yIndex = srcY * yRowStride + srcX;
           final int uvIndex = (srcY ~/ 2) * uvRowStride + (srcX ~/ 2) * uvPixelStride;
@@ -92,6 +110,13 @@ class FaceRecognitionService {
 
           processedImage.setPixelRgb(w, h, r, g, b);
         }
+      }
+
+      // DEBUG: Save the cropped face to disk if requested
+      final String? debugPath = args['debugPath'];
+      if (debugPath != null) {
+        File(debugPath).writeAsBytesSync(img.encodeJpg(processedImage));
+        debugPrint('[FaceRecognition] Debug image saved: $debugPath');
       }
 
       return processedImage;
@@ -172,8 +197,8 @@ class FaceRecognitionService {
   static RecognitionResult findBestMatch(
     List<double> liveEmbedding,
     List<MapEntry<String, List<double>>> knownFaces, {
-    double threshold = 0.40,  // tightened from 0.45
-    double minMargin = 0.08,  // second-best must be at least this much worse
+    double threshold = 0.38,  // tightened further after cropping fix
+    double minMargin = 0.10,  // increased to require clearer distinction
   }) {
     if (knownFaces.isEmpty) {
       return const RecognitionResult(label: 'Unknown', distance: 1.0, isRecognized: false);

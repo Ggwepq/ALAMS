@@ -24,13 +24,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _loadSettings() async {
     final startStr = await _db.getSetting('work_start', '08:00');
     final endStr = await _db.getSetting('work_end', '17:00');
+    final graceStr = await _db.getSetting('grace_period', '60');
 
     setState(() {
       _workStart = _parseTime(startStr);
       _workEnd = _parseTime(endStr);
+      _gracePeriod = int.tryParse(graceStr) ?? 60;
       _isLoading = false;
     });
   }
+
+  int _gracePeriod = 60;
 
   TimeOfDay _parseTime(String time) {
     final parts = time.split(':');
@@ -104,6 +108,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   icon: Icons.logout_rounded,
                   onTap: () => _selectTime(context, false),
                 ),
+                const SizedBox(height: 12),
+                _buildNumericSettingTile(
+                  title: 'Absence Grace Period',
+                  subtitle: 'Minutes after check-in time before marking as absent',
+                  value: _gracePeriod,
+                  suffix: 'mins',
+                  icon: Icons.timer_outlined,
+                  onTap: () => _showNumberDialog('grace_period', _gracePeriod),
+                ),
                 const SizedBox(height: 40),
                 _buildInfoCard(),
               ],
@@ -119,6 +132,98 @@ class _SettingsScreenState extends State<SettingsScreen> {
         fontSize: 12,
         fontWeight: FontWeight.bold,
         letterSpacing: 1.2,
+      ),
+    );
+  }
+
+  Future<void> _showNumberDialog(String key, int current) async {
+    final controller = TextEditingController(text: current.toString());
+    final newValue = await showDialog<int>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF161B22),
+        title: Text('Edit ${key.replaceAll('_', ' ')}', style: const TextStyle(color: Colors.white)),
+        content: TextField(
+          controller: controller,
+          keyboardType: TextInputType.number,
+          autofocus: true,
+          style: const TextStyle(color: Colors.white),
+          decoration: const InputDecoration(
+            suffixText: 'minutes',
+            suffixStyle: TextStyle(color: Colors.white38),
+            enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+            focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.tealAccent)),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('CANCEL')),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, int.tryParse(controller.text)),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.teal),
+            child: const Text('SAVE'),
+          ),
+        ],
+      ),
+    );
+
+    if (newValue != null) {
+      setState(() => _gracePeriod = newValue);
+      await _db.updateSetting(key, newValue.toString());
+    }
+  }
+
+  Widget _buildNumericSettingTile({
+    required String title,
+    required String subtitle,
+    required int value,
+    required String suffix,
+    required IconData icon,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(20),
+      child: Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.03),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: Colors.white10),
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.teal.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Icon(icon, color: Colors.tealAccent),
+            ),
+            const SizedBox(width: 20),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title, style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 4),
+                  Text(subtitle, style: const TextStyle(color: Colors.white38, fontSize: 13)),
+                ],
+              ),
+            ),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.white10,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                '$value $suffix',
+                style: const TextStyle(color: Colors.tealAccent, fontWeight: FontWeight.bold),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

@@ -24,7 +24,7 @@ class DatabaseService {
 
     final db = await openDatabase(
       path,
-      version: 8,
+      version: 9,
       onCreate: _createDB,
       onOpen: (db) async {
         await db.execute('PRAGMA foreign_keys = ON');
@@ -90,9 +90,34 @@ class DatabaseService {
             )
           ''');
         }
+        if (oldVersion < 9) {
+          await db.insert('system_settings', {'key': 'grace_period', 'value': '60'},
+              conflictAlgorithm: ConflictAlgorithm.ignore);
+        }
       },
     );
     return db;
+  }
+
+  /// Laravel-style database refresh. Wipes everything and re-seeds the admin.
+  Future<void> refreshDatabase() async {
+    final dbPath = await getDatabasesPath();
+    final path = join(dbPath, 'alams.db');
+    
+    // Close existing connection
+    if (_database != null) {
+      await _database!.close();
+      _database = null;
+    }
+
+    // Delete the file
+    await deleteDatabase(path);
+    print('[DatabaseService] 🗑️ Database file deleted.');
+
+    // Re-initialize and Seed
+    _database = await _initDB('alams.db');
+    await ensureStaticAdmin();
+    print('[DatabaseService] 🌱 Database refreshed and seeded.');
   }
 
   // ─── Schema Creation ────────────────────────────────────────────────────────
@@ -145,6 +170,8 @@ class DatabaseService {
     ''');
     await db.insert('system_settings', {'key': 'work_start', 'value': '08:00'});
     await db.insert('system_settings', {'key': 'work_end',   'value': '17:00'});
+    await db.insert('system_settings', {'key': 'grace_period', 'value': '60'});
+    await db.insert('system_settings', {'key': 'watermark_enabled', 'value': '1'});
 
     await db.execute('''
       CREATE TABLE login_attempts (
@@ -199,12 +226,37 @@ class DatabaseService {
       limit:     1,
     );
 
+    final hashedPassword = await CryptoUtils.hashPasswordAsync('Alams1234');
+
     if (existing.isNotEmpty) {
-      print('[DatabaseService] Static admin already exists — skipping.');
+      final row = existing.first;
+      final storedPassword = row['password'] as String? ?? '';
+      
+      bool match = false;
+      if (CryptoUtils.isHashed(storedPassword)) {
+        match = await CryptoUtils.verifyPasswordAsync('Alams1234', storedPassword);
+      } else {
+        match = (storedPassword == 'Alams1234');
+      }
+
+      if (!match) {
+        await db.update(
+          'employees',
+          {'password': hashedPassword},
+          where:     'id = ?',
+          whereArgs: [row['id']],
+        );
+        
+        await SyncService.instance.enqueue(
+          tableName: 'employees',
+          operation: 'UPDATE',
+          recordId:  row['id'] as int,
+          payload:   {'id': row['id'], 'password': hashedPassword},
+        );
+        print('[DatabaseService] 🔄 Static admin password updated to Alams1234');
+      }
       return;
     }
-
-    final hashedPassword = await CryptoUtils.hashPasswordAsync('alams2024');
 
     final newId = await db.insert('employees', {
       'name':             'System Administrator',
@@ -538,14 +590,41 @@ class DatabaseService {
 
   Future<List<Employee>> getAbsentToday() async {
     final db    = await instance.database;
-    final today = DateTime.now().toIso8601String().substring(0, 10);
+    final today = DateTime.now();
+    final todayStr = today.toIso8601String().substring(0, 10);
+
+    // Fetch settings
+    final workStartStr  = await getSetting('work_start', '08:00');
+    final gracePeriodStr = await getSetting('grace_period', '60');
+    
+    final int graceMinutes = int.tryParse(gracePeriodStr) ?? 60;
+    final List<String> timeParts = workStartStr.split(':');
+    final int startHour = int.parse(timeParts[0]);
+    final int startMin  = int.parse(timeParts[1]);
+
+    // Create threshold time
+    final DateTime threshold = DateTime(
+      today.year,
+      today.month,
+      today.day,
+      startHour,
+      startMin,
+    ).add(Duration(minutes: graceMinutes));
+
+    // If current time is BEFORE work_start + grace_period, 
+    // technically nobody is "officially" absent yet for the day's record (optional design choice).
+    // The user requested: "The absent card should show employees who havent timed in 1 hr after the check in time."
+    if (today.isBefore(threshold)) {
+      return [];
+    }
+
     final result = await db.rawQuery('''
       SELECT * FROM employees
       WHERE is_admin = 0 AND is_deleted = 0
         AND id NOT IN (
           SELECT DISTINCT employee_id FROM attendance WHERE timestamp LIKE ?
         )
-    ''', ['$today%']);
+    ''', ['$todayStr%']);
     return result.map((json) => Employee.fromMap(json)).toList();
   }
 
@@ -560,13 +639,16 @@ class DatabaseService {
     return Attendance.fromMap(result.first);
   }
 
-  Future<List<Map<String, dynamic>>> getAttendanceLogsWithNames() async {
+  Future<List<Map<String, dynamic>>> getAttendanceLogsWithNames({bool includeDeleted = false}) async {
     final db = await instance.database;
+    String whereClause = includeDeleted ? '' : 'WHERE e.is_deleted = 0 OR e.is_deleted IS NULL';
+    
     return await db.rawQuery('''
       SELECT a.id, a.employee_id, a.timestamp, a.type, a.status,
-             e.name AS employee_name, e.is_deleted AS employee_deleted
+             e.name AS employee_name, e.emp_id AS employee_code, e.is_deleted AS employee_deleted
       FROM attendance a
       LEFT JOIN employees e ON a.employee_id = e.id
+      $whereClause
       ORDER BY a.timestamp DESC
     ''');
   }

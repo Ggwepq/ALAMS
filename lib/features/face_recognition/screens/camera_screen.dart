@@ -45,6 +45,11 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
   DateTime? _realFaceFirstSeen;
   bool _spoofWarningResetInProgress = false;
 
+  // Identity Consensus Buffer
+  String? _consensusName;
+  int _consensusCount = 0;
+  final int _consensusThreshold = 3;
+
   @override
   void initState() {
     super.initState();
@@ -291,7 +296,14 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
     final livenessService = ref.read(livenessServiceProvider);
     final faceService = ref.read(faceRecognitionServiceProvider);
     
-    final preprocessed = await compute(FaceRecognitionService.preprocessCameraImage, image);
+    final preprocessed = await compute(
+      FaceRecognitionService.preprocessCameraImage,
+      {
+        'image': image,
+        'cropRect': _getOvalBufferRect(image.width, image.height),
+        'debugPath': _debugPath,
+      },
+    );
     if (preprocessed == null) return;
 
     final liveEmbedding = faceService.generateEmbedding(preprocessed);
@@ -304,17 +316,37 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
       return;
     }
 
-    final knownFaces = employees.map((e) => MapEntry(e.name, e.facialEmbedding)).toList();
+    final knownFaces = employees
+        .where((e) => e.facialEmbedding.isNotEmpty)
+        .map((e) => MapEntry(e.name, e.facialEmbedding))
+        .toList();
     final result = await compute((data) {
       return FaceRecognitionService.findBestMatch(data.key, data.value);
     }, MapEntry(liveEmbedding, knownFaces));
 
-    livenessService.reset();
-    _speculativeResult = null;
-
     if (result.isRecognized) {
+      if (_consensusName == result.label) {
+        _consensusCount++;
+      } else {
+        _consensusName = result.label;
+        _consensusCount = 1;
+      }
+      
+      if (mounted) {
+        // Updated UI via _LivenessStatusBadge parameters
+      }
+
+      if (_consensusCount < _consensusThreshold) {
+        // Continue processing frames to build consensus
+        return;
+      }
+
+      // Consensus reached!
       final recognizedEmployee = employees.firstWhere((e) => e.name == result.label);
       ref.read(recognizedEmployeeProvider.notifier).set(recognizedEmployee.name);
+      
+      _consensusName = null;
+      _consensusCount = 0;
       
       await _cameraController?.stopImageStream();
       _nextAvailableRecognition = DateTime.now().add(const Duration(seconds: 5));
@@ -332,6 +364,8 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
         }
       }
     } else {
+      _consensusName = null;
+      _consensusCount = 0;
       _speculativeResult = null;
       ref.read(spoofResultProvider.notifier).set(null);
       ref.read(recognizedEmployeeProvider.notifier).set(null);
@@ -351,6 +385,29 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
         margin: const EdgeInsets.only(bottom: 180, left: 40, right: 40),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
+    );
+  }
+
+  /// Maps the visual UI guide to the raw camera buffer indices.
+  /// Android front sensors are rotated 270° and mirrored.
+  Rect _getOvalBufferRect(int bufferWidth, int bufferHeight) {
+    // 1. Target the visual center of the UI guide (0.5, 0.45)
+    const double nx = 0.5;
+    const double ny = 0.45;
+
+    // 2. Map UI coordinates to Buffer indices (270 deg rotation)
+    // Buffer Major Axis (W=640) maps to UI Vertical (Y)
+    // Buffer Minor Axis (H=480) maps to UI Horizontal (X)
+    final double centerBx = (1.0 - ny) * bufferWidth; // ny 0.45 -> bx 352
+    final double centerBy = nx * bufferHeight;       // nx 0.5  -> by 240
+
+    // 3. Define a fixed square crop around this center (approx 70% of sensor height)
+    final double cropSize = bufferHeight * 0.72; // ~345 pixels for a 480p sensor
+
+    return Rect.fromCenter(
+      center: Offset(centerBx, centerBy),
+      width: cropSize,
+      height: cropSize,
     );
   }
 
@@ -536,7 +593,12 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
             bottom: 110,
             left: 24,
             right: 24,
-            child: _LivenessStatusBadge(state: livenessState, isSpeculating: _isSpeculating),
+            child: _LivenessStatusBadge(
+              state: livenessState, 
+              isSpeculating: _isSpeculating,
+              consensusCount: _consensusCount,
+              consensusThreshold: _consensusThreshold,
+            ),
           ),
 
           // ── Real-Time Authenticity Label ──────────────────────────
@@ -677,7 +739,14 @@ class _FaceOvalPainter extends CustomPainter {
 class _LivenessStatusBadge extends ConsumerWidget {
   final LivenessState state;
   final bool isSpeculating;
-  const _LivenessStatusBadge({required this.state, required this.isSpeculating});
+  final int consensusCount;
+  final int consensusThreshold;
+  const _LivenessStatusBadge({
+    required this.state, 
+    required this.isSpeculating,
+    required this.consensusCount,
+    required this.consensusThreshold,
+  });
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -740,6 +809,13 @@ class _LivenessStatusBadge extends ConsumerWidget {
                       color: color, fontSize: 15, fontWeight: FontWeight.bold),
                   textAlign: TextAlign.center,
                 ),
+                if (state == LivenessState.passed && consensusCount > 0) ...[
+                   const SizedBox(height: 8),
+                   Text(
+                     'Step: Identity Consensus [$consensusCount/$consensusThreshold]',
+                     style: const TextStyle(color: Colors.white70, fontSize: 12),
+                   ),
+                ],
               ],
             ),
             if (state == LivenessState.passed && isSpeculating) ...[
