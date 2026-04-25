@@ -592,6 +592,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.2.0"
+  password_hash_plus:
+    dependency: "direct main"
+    description:
+      name: password_hash_plus
+      sha256: "2e7ead0a78ea7785beb5e9e1643c2af3bb02727bb26e5ad57a40156b96a5775e"
+      url: "https://pub.dev"
+    source: hosted
+    version: "4.0.0"
   path:
     dependency: "direct main"
     description:
@@ -966,7 +974,7 @@ packages:
     source: hosted
     version: "1.4.1"
   supabase:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: supabase
       sha256: "40e5a8833c8834e140ef53b60a6181849667eba9ca125acb7f8e24c6a769d418"

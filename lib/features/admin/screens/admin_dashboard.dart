@@ -20,6 +20,16 @@ class AdminDashboard extends ConsumerWidget {
         backgroundColor: Colors.transparent,
         elevation: 0,
         centerTitle: true,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.logout, color: Colors.redAccent),
+            tooltip: 'Logout',
+            onPressed: () {
+              Navigator.of(context).pushNamedAndRemoveUntil('/', (route) => false);
+            },
+          ),
+          const SizedBox(width: 8),
+        ],
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
@@ -223,31 +233,36 @@ class AdminDashboard extends ConsumerWidget {
     );
   }
 
-  Widget _buildMenuTile(BuildContext context, {
-    required String title,
-    required String subtitle,
-    required IconData icon,
-    required Color color,
-    required String route,
-  }) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12.0),
+  Widget _buildMenuTile(BuildContext context,
+      {required String title,
+      required String subtitle,
+      required IconData icon,
+      required Color color,
+      required String route}) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF161B22),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white.withOpacity(0.05)),
+      ),
       child: ListTile(
-        onTap: () => Navigator.pushNamed(context, route),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        tileColor: Colors.white.withOpacity(0.03),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
         leading: Container(
           padding: const EdgeInsets.all(10),
           decoration: BoxDecoration(
-            color: color.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Icon(icon, color: color),
+              color: color.withOpacity(0.1), shape: BoxShape.circle),
+          child: Icon(icon, color: color, size: 24),
         ),
-        title: Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
-        subtitle: Text(subtitle, style: const TextStyle(color: Colors.white38, fontSize: 12)),
+        title: Text(title,
+            style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+                fontSize: 15)),
+        subtitle:
+            Text(subtitle, style: const TextStyle(color: Colors.white38, fontSize: 13)),
         trailing: const Icon(Icons.chevron_right, color: Colors.white24),
+        onTap: () => Navigator.of(context).pushNamed(route),
       ),
     );
   }

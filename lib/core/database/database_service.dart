@@ -304,11 +304,14 @@ class DatabaseService {
   Future<int> insertEmployee(Employee employee) async {
     final db  = await instance.database;
     final map = employee.toMap();
+    
+    // ✅ Secure Admin Passwords before insertion
     if (employee.isAdmin && employee.password != null && employee.password!.isNotEmpty) {
       if (!CryptoUtils.isHashed(employee.password!)) {
         map['password'] = await CryptoUtils.hashPasswordAsync(employee.password!);
       }
     }
+
     final newId = await db.insert('employees', map);
 
     // ✅ facial_embedding is now included in sync
@@ -340,6 +343,31 @@ class DatabaseService {
         where: 'is_admin = 1', limit: 1);
     if (result.isEmpty) return null;
     return Employee.fromMap(result.first);
+  }
+
+
+  /// Calculates the next available Employee ID (e.g. EMP-005)
+  Future<String> getNextEmployeeId(String prefix) async {
+    final db = await instance.database;
+    final result = await db.rawQuery('''
+      SELECT emp_id FROM employees 
+      WHERE emp_id LIKE ? 
+      ORDER BY id DESC LIMIT 1
+    ''', ['$prefix-%']);
+
+    if (result.isEmpty) return '$prefix-001';
+
+    try {
+      final lastId = result.first['emp_id'] as String;
+      final parts = lastId.split('-');
+      if (parts.length < 2) return '$prefix-001';
+      
+      final currentNum = int.tryParse(parts.last) ?? 0;
+      final nextNum = currentNum + 1;
+      return '$prefix-${nextNum.toString().padLeft(3, '0')}';
+    } catch (e) {
+      return '$prefix-001';
+    }
   }
 
   Future<int> deleteEmployee(int id) async {
