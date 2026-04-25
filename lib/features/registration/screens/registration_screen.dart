@@ -47,6 +47,9 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
   CameraController? _cameraController;
   bool _isCameraReady      = false;
   bool _isProcessingFrame  = false;
+  int _stabilityCount      = 0;
+  bool _hasBlinked         = false;
+  final int _stabilityThreshold = 3; // ~1 second with 300ms throttling
 
   RegistrationPose _currentPose = RegistrationPose.front;
   final List<List<double>> _capturedEmbeddings = [];
@@ -92,7 +95,9 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
           _usernameController.text = widget.editEmployee!.username ?? '';
           _passwordController.text = widget.editEmployee!.password ?? '';
         } else {
-          _empIdController.text = 'EMP-${(count + 1).toString().padLeft(3, '0')}';
+          db.getNextEmployeeId('EMP').then((nextId) {
+            if (mounted) setState(() => _empIdController.text = nextId);
+          });
           if (_departments.isNotEmpty) {
             _selectedDepartment = _departments.first;
           }
@@ -177,7 +182,20 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
       final bool isPoseValid = _checkPose(face);
 
       if (isPoseValid) {
-        final preprocessed = FaceRecognitionService.preprocessCameraImage(image);
+        if (_currentPose == RegistrationPose.front && _stabilityCount < _stabilityThreshold) {
+          _stabilityCount++;
+          if (mounted) setState(() => _statusMessage = 'Hold still... (${_stabilityCount}/${_stabilityThreshold})');
+          return;
+        }
+
+        if (_currentPose == RegistrationPose.blink) {
+          _hasBlinked = true;
+        }
+
+        final preprocessed = FaceRecognitionService.preprocessCameraImage({
+          'image': image,
+          'cropRect': _getOvalBufferRect(image.width, image.height),
+        });
         if (preprocessed == null) return; // skip frame if preprocessing failed
 
         final embedding = faceService.generateEmbedding(preprocessed);
@@ -188,7 +206,7 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
           final db           = DatabaseService.instance;
           final allEmployees = await db.getAllEmployees();
           final knownFaces   = allEmployees
-              .where((e) => e.facialEmbedding.isNotEmpty)
+              .where((e) => e.facialEmbedding.isNotEmpty && (widget.editEmployee == null || e.id != widget.editEmployee!.id))
               .map((e) => MapEntry(e.name, e.facialEmbedding))
               .toList();
 
@@ -282,19 +300,27 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
     try {
       final db = DatabaseService.instance;
 
-      // Guard: non-admin MUST have captured embeddings
+      // Guard: non-admin MUST have captured embeddings and blinked
       if (!_isFirstAdmin &&
-          !(widget.editEmployee?.isAdmin ?? false) &&
-          _capturedEmbeddings.isEmpty) {
-        setState(() {
-          _step         = RegistrationStep.error;
-          _errorMessage = 'Face scan failed. Please try again.';
-        });
-        return;
+          !(widget.editEmployee?.isAdmin ?? false)) {
+        if (_capturedEmbeddings.isEmpty) {
+          setState(() {
+            _step         = RegistrationStep.error;
+            _errorMessage = 'Face scan failed. Please try again.';
+          });
+          return;
+        }
+        if (!_hasBlinked) {
+          setState(() {
+            _step         = RegistrationStep.error;
+            _errorMessage = 'Liveness check failed (no blink detected). Please try again.';
+          });
+          return;
+        }
       }
 
       final avgEmbedding = _capturedEmbeddings.isEmpty
-          ? List<double>.filled(128, 0.0)
+          ? (widget.editEmployee?.facialEmbedding ?? List<double>.filled(128, 0.0))
           : _averageEmbeddings(_capturedEmbeddings);
 
       final name     = _nameController.text.trim();
@@ -674,6 +700,22 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
           const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
     );
   }
+  
+  /// Maps the visual registration oval to the raw camera buffer indices.
+  /// Synchronized with CameraScreen for identical recognition context.
+  Rect _getOvalBufferRect(int bufferWidth, int bufferHeight) {
+    const double nx = 0.5;
+    const double ny = 0.45; // Match CameraScreen's center
+    final double centerBx = (1.0 - ny) * bufferWidth;
+    final double centerBy = nx * bufferHeight;
+    final double cropSize = bufferHeight * 0.72;
+
+    return Rect.fromCenter(
+      center: Offset(centerBx, centerBy),
+      width: cropSize,
+      height: cropSize,
+    );
+  }
 
   // ─── Step 2: Face Scan Screen ─────────────────────────────────────────────
 
@@ -947,8 +989,8 @@ class _GuidedOvalPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final cx    = size.width / 2;
-    final cy    = size.height * 0.42;
-    final ovalW = size.width * 0.62;
+    final cy    = size.height * 0.45; // Match Scanner's 0.45
+    final ovalW = size.width * 0.65; // Unified width
     final ovalH = ovalW * 1.35;
     final rect  = Rect.fromCenter(
         center: Offset(cx, cy), width: ovalW, height: ovalH);

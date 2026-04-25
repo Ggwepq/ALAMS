@@ -50,22 +50,11 @@ class NcnnAntiSpoofService {
       // Calculate face box in sensor coordinates
       int left = 0, top = 0, right = image.width, bottom = image.height;
       if (cropRect != null) {
-        if (sensorOrientation == 270) {
-          left = cropRect.top.toInt();
-          top = (image.height - cropRect.right).toInt();
-          right = cropRect.bottom.toInt();
-          bottom = (image.height - cropRect.left).toInt();
-        } else if (sensorOrientation == 90) {
-          left = (image.width - cropRect.bottom).toInt();
-          top = cropRect.left.toInt();
-          right = (image.width - cropRect.top).toInt();
-          bottom = cropRect.right.toInt();
-        } else {
-          left = cropRect.left.toInt();
-          top = cropRect.top.toInt();
-          right = cropRect.right.toInt();
-          bottom = cropRect.bottom.toInt();
-        }
+        left = cropRect.left.toInt();
+        top = cropRect.top.toInt();
+        right = cropRect.right.toInt();
+        bottom = cropRect.bottom.toInt();
+
         // Clamp to valid range
         left = left.clamp(0, image.width - 1);
         top = top.clamp(0, image.height - 1);

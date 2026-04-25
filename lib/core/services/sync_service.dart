@@ -112,19 +112,21 @@ class SyncService {
           print('[SyncService] ✅ Applied ${payload.eventType} on $table id=${row['id']}');
 
         case PostgresChangeEvent.delete:
-          final id = old['id'];
-          if (id == null) return;
+          final pk = table == 'system_settings' ? 'key' : 'id';
+          final pkValue = old[pk];
+          if (pkValue == null) return;
+
           if (table == 'employees') {
             await db.update(
               'employees',
               {'is_deleted': 1},
               where:     'id = ?',
-              whereArgs: [id],
+              whereArgs: [pkValue],
             );
           } else {
-            await db.delete(table, where: 'id = ?', whereArgs: [id]);
+            await db.delete(table, where: '$pk = ?', whereArgs: [pkValue]);
           }
-          print('[SyncService] ✅ Applied DELETE on $table id=$id');
+          print('[SyncService] ✅ Applied DELETE on $table $pk=$pkValue');
 
         default:
           break;
@@ -275,6 +277,8 @@ class SyncService {
         bool success = false;
         try {
           final remotePayload = Map<String, dynamic>.from(payload);
+          final pk = table == 'system_settings' ? 'key' : 'id';
+          final pkValue = payload[pk];
 
           switch (operation) {
             case 'INSERT':
@@ -285,7 +289,7 @@ class SyncService {
               await _supabase
                   .from(table)
                   .update(remotePayload)
-                  .eq('id', payload['id']);
+                  .eq(pk, pkValue);
               success = true;
 
             case 'DELETE':
@@ -293,17 +297,17 @@ class SyncService {
                 await _supabase
                     .from(table)
                     .update({'is_deleted': 1})
-                    .eq('id', payload['id']);
+                    .eq(pk, pkValue);
               } else {
                 await _supabase
                     .from(table)
                     .delete()
-                    .eq('id', payload['id']);
+                    .eq(pk, pkValue);
               }
               success = true;
           }
 
-          print('[SyncService] ✅ Synced $operation on $table id=${payload['id']}');
+          print('[SyncService] ✅ Synced $operation on $table $pk=$pkValue');
         } catch (e, stack) {
           print('[SyncService] ❌ Failed to sync item $queueId: $e\n$stack');
         }

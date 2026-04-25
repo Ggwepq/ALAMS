@@ -12,11 +12,27 @@ final attendanceLogsProvider = FutureProvider<List<Attendance>>((ref) async {
   return db.getAttendanceLogs();
 });
 
+class IncludeDeletedLogsNotifier extends Notifier<bool> {
+  @override
+  bool build() => false;
+
+  @override
+  set state(bool value) => super.state = value;
+
+}
+
+final includeDeletedLogsProvider =
+    NotifierProvider<IncludeDeletedLogsNotifier, bool>(
+  IncludeDeletedLogsNotifier.new,
+);
+
+
 final attendanceLogsWithNamesProvider =
     FutureProvider<List<Map<String, dynamic>>>((ref) async {
   ref.watch(syncRefreshCountProvider);
+  final includeDeleted = ref.watch(includeDeletedLogsProvider);
   final db = ref.watch(databaseServiceProvider);
-  return db.getAttendanceLogsWithNames();
+  return db.getAttendanceLogsWithNames(includeDeleted: includeDeleted);
 });
 
 final attendanceLogsTodayProvider =

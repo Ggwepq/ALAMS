@@ -240,22 +240,43 @@ class _RootGuardianState extends State<RootGuardian> {
   }
 }
 
-class WatermarkOverlay extends StatelessWidget {
+class WatermarkOverlay extends StatefulWidget {
   final Widget child;
 
   const WatermarkOverlay({super.key, required this.child});
 
   @override
+  State<WatermarkOverlay> createState() => _WatermarkOverlayState();
+}
+
+class _WatermarkOverlayState extends State<WatermarkOverlay> {
+  bool _showWatermark = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkWatermark();
+  }
+
+  Future<void> _checkWatermark() async {
+    final enabled = await DatabaseService.instance.getSetting('watermark_enabled', '1');
+    if (mounted) {
+      setState(() => _showWatermark = enabled == '1');
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Stack(
       children: [
-        child,
-        IgnorePointer(
-          child: CustomPaint(
-            painter: WatermarkPainter(),
-            size: Size.infinite,
+        widget.child,
+        if (_showWatermark)
+          IgnorePointer(
+            child: CustomPaint(
+              painter: WatermarkPainter(),
+              size: Size.infinite,
+            ),
           ),
-        ),
       ],
     );
   }

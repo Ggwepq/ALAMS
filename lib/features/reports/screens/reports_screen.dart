@@ -149,6 +149,24 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
                                   foregroundColor: _dateFilter == null ? Colors.white70 : Colors.tealAccent,
                                 ),
                               ),
+                              const SizedBox(width: 8),
+                              // Deleted Toggle
+                              FilterChip(
+                                label: const Text('Show Deleted', style: TextStyle(fontSize: 10)),
+                                selected: ref.watch(includeDeletedLogsProvider),
+                                onSelected: (v) => ref.read(includeDeletedLogsProvider.notifier).state = v,
+                                selectedColor: Colors.redAccent.withAlpha(50),
+                                checkmarkColor: Colors.redAccent,
+                                labelStyle: TextStyle(
+                                  color: ref.watch(includeDeletedLogsProvider) ? Colors.redAccent : Colors.white38,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                                side: BorderSide(
+                                  color: ref.watch(includeDeletedLogsProvider) ? Colors.redAccent.withAlpha(100) : Colors.white10,
+                                ),
+                                backgroundColor: Colors.transparent,
+                                visualDensity: VisualDensity.compact,
+                              ),
                               if (_dateFilter != null)
                                 IconButton(
                                   onPressed: () => setState(() => _dateFilter = null),
