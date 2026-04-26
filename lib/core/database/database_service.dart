@@ -1,3 +1,4 @@
+import 'dart:math';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import '../models/employee.dart';
@@ -173,6 +174,15 @@ class DatabaseService {
     await db.insert('system_settings', {'key': 'grace_period', 'value': '60'});
     await db.insert('system_settings', {'key': 'watermark_enabled', 'value': '1'});
 
+    // 📱 Unique Station Code to prevent ID collisions (e.g. ABC-001)
+    final String randomCode = List.generate(3, (index) => 
+        String.fromCharCode(DateTime.now().millisecond % 26 + 65)).join();
+    await db.insert('system_settings', {'key': 'device_code', 'value': randomCode});
+
+    // 🛡️ Random Offset for internal IDs to prevent PRIMARY KEY collisions
+    final int randomOffset = (Random().nextInt(90) + 1) * 1000000;
+    await db.insert('system_settings', {'key': 'id_offset', 'value': randomOffset.toString()});
+
     await db.execute('''
       CREATE TABLE login_attempts (
         id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -256,7 +266,17 @@ class DatabaseService {
 
   Future<int> insertEmployee(Employee employee) async {
     final db  = await instance.database;
-    final map = employee.toMap();
+    
+    // 🛡️ Global ID Collision Prevention
+    int? finalId = employee.id;
+    if (finalId == null) {
+      final offset = int.parse(await getSetting('id_offset', '0'));
+      final lastRow = await db.rawQuery('SELECT MAX(id) as max_id FROM employees');
+      int currentMax = Sqflite.firstIntValue(lastRow) ?? 0;
+      finalId = max(currentMax + 1, offset + 1);
+    }
+
+    final map = employee.toMap()..['id'] = finalId;
     
     // ✅ Secure Admin Passwords before insertion
     if (employee.isAdmin && employee.password != null && employee.password!.isNotEmpty) {
@@ -265,19 +285,19 @@ class DatabaseService {
       }
     }
 
-    final newId = await db.insert('employees', map);
+    await db.insert('employees', map);
 
     // ✅ facial_embedding is now included in sync
-    final syncMap = Map<String, dynamic>.from(map)..['id'] = newId;
+    final syncMap = Map<String, dynamic>.from(map);
 
     await SyncService.instance.enqueue(
       tableName: 'employees',
       operation: 'INSERT',
-      recordId:  newId,
+      recordId:  finalId,
       payload:   syncMap,
     );
 
-    return newId;
+    return finalId;
   }
 
   Future<List<Employee>> getAllEmployees() async {
@@ -302,24 +322,28 @@ class DatabaseService {
   /// Calculates the next available Employee ID (e.g. EMP-005)
   Future<String> getNextEmployeeId(String prefix) async {
     final db = await instance.database;
+    
+    // 🏷️ Fetch the unique station code for this device
+    final deviceCode = await getSetting('device_code', 'DEV');
+
     final result = await db.rawQuery('''
       SELECT emp_id FROM employees 
       WHERE emp_id LIKE ? 
       ORDER BY id DESC LIMIT 1
-    ''', ['$prefix-%']);
+    ''', ['$deviceCode-%']);
 
-    if (result.isEmpty) return '$prefix-001';
+    if (result.isEmpty) return '$deviceCode-001';
 
     try {
       final lastId = result.first['emp_id'] as String;
       final parts = lastId.split('-');
-      if (parts.length < 2) return '$prefix-001';
+      if (parts.length < 2) return '$deviceCode-001';
       
       final currentNum = int.tryParse(parts.last) ?? 0;
       final nextNum = currentNum + 1;
-      return '$prefix-${nextNum.toString().padLeft(3, '0')}';
+      return '$deviceCode-${nextNum.toString().padLeft(3, '0')}';
     } catch (e) {
-      return '$prefix-001';
+      return '$deviceCode-001';
     }
   }
 
@@ -481,6 +505,15 @@ class DatabaseService {
   Future<String> insertAttendance(Attendance attendance) async {
     final db = await instance.database;
 
+    // 🛡️ Global ID Collision Prevention
+    int? finalId = attendance.id;
+    if (finalId == null) {
+      final offset = int.parse(await getSetting('id_offset', '0'));
+      final lastRow = await db.rawQuery('SELECT MAX(id) as max_id FROM attendance');
+      int currentMax = Sqflite.firstIntValue(lastRow) ?? 0;
+      finalId = max(currentMax + 1, offset + 1);
+    }
+
     final startRes = await db.query('system_settings',
         where: 'key = ?', whereArgs: ['work_start']);
     final endRes = await db.query('system_settings',
@@ -512,20 +545,20 @@ class DatabaseService {
     }
 
     final finalAttendance = Attendance(
-      id:         attendance.id,
+      id:         finalId,
       employeeId: attendance.employeeId,
       timestamp:  attendance.timestamp,
       type:       attendance.type,
       status:     finalStatus,
     );
 
-    final newId = await db.insert('attendance', finalAttendance.toMap());
+    await db.insert('attendance', finalAttendance.toMap());
 
     await SyncService.instance.enqueue(
       tableName: 'attendance',
       operation: 'INSERT',
-      recordId:  newId,
-      payload:   {...finalAttendance.toMap(), 'id': newId},
+      recordId:  finalId,
+      payload:   {...finalAttendance.toMap(), 'id': finalId},
     );
 
     return finalStatus;
