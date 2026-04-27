@@ -218,17 +218,24 @@ class FaceRecognitionService {
 
   /// Find the best match in [knownFaces] for [liveEmbedding].
   ///
-  /// Uses a two-threshold approach:
-  /// - Primary threshold [threshold]: the distance must be below this to count as "recognised".
-  /// - Margin guard [minMargin]: the gap between the best and second-best match must be
-  ///   at least this large, preventing ambiguous matches near the boundary.
+  /// Uses a strict security-first approach:
+  /// - Primary threshold [threshold]: 0.40 (Strict security for biometric verification).
+  /// - Margin guard [minMargin]: 0.10 (Best match must be significantly better than second best).
   static RecognitionResult findBestMatch(
     List<double> liveEmbedding,
     List<MapEntry<String, List<double>>> knownFaces, {
-    double threshold = 0.55,  // Balanced for mobile deployment (0.50-0.60 is standard)
-    double minMargin = 0.05,  // Reduced to handle siblings or similar features
+    double threshold = 0.40,  // Tightened to 0.40 for production security
+    double minMargin = 0.10,  // Increased from 0.05 to ensure clear identity separation
   }) {
     if (knownFaces.isEmpty) {
+      return const RecognitionResult(label: 'Unknown', distance: 1.0, isRecognized: false);
+    }
+
+    // 🛡️ QUALITY GUARD: Ensure embedding is valid and normalized
+    double liveNorm = 0;
+    for (final v in liveEmbedding) liveNorm += v * v;
+    if (liveNorm < 0.5) {
+      debugPrint('[FaceRecognition] Rejection: Input valid/norm too low ($liveNorm)');
       return const RecognitionResult(label: 'Unknown', distance: 1.0, isRecognized: false);
     }
 
@@ -247,17 +254,31 @@ class FaceRecognitionService {
       }
     }
 
-    final margin      = secondDist - bestDist;
+    // 🛡️ NO-COMPETITION GUARD:
+    // If only one user is registered, we have no margin to check against.
+    // We enforce an ultra-strict "Identity Threshold" of 0.35 here.
+    if (knownFaces.length == 1 && bestDist > 0.35) {
+       debugPrint('[FaceRecognition] Single-user rejection: $bestDist > 0.35');
+       return RecognitionResult(
+        label:        'Unknown',
+        distance:     bestDist,
+        isRecognized: false,
+      );
+    }
+
+    final margin = secondDist - bestDist;
     
-    // 🛡️ ADAPTIVE MARGIN: If the best match is exceptionally strong (< 0.35), 
-    // we ignore the margin safety check to ensure recall.
-    final bool isStrongMatch = bestDist < 0.35;
+    // 🛡️ ADAPTIVE SECURITY:
+    // A match is only accepted if:
+    // 1. It is below the 0.40 threshold AND
+    // 2. Either it's nearly a perfect match (< 0.30) OR it's significantly better than anyone else.
+    final bool isStrongMatch = bestDist < 0.30;
     final isRecognized = bestDist < threshold && (isStrongMatch || margin >= minMargin);
 
-    debugPrint('[FaceRecognition] best=$bestDist margin=$margin strong=$isStrongMatch → recognized=$isRecognized');
+    debugPrint('[FaceRecognition] best=$bestDist margin=$margin (target: $minMargin) strong=$isStrongMatch → recognized=$isRecognized');
 
     return RecognitionResult(
-      label:        bestLabel,
+      label:        isRecognized ? bestLabel : 'Unknown',
       distance:     bestDist,
       isRecognized: isRecognized,
     );
