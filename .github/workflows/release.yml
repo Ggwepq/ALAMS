@@ -53,7 +53,7 @@ jobs:
         if: env.SKIP_RELEASE == 'false' && env.TAG_EXISTS == 'false'
         uses: subosito/flutter-action@v2
         with:
-          channel: 'stable'
+          # channel: 'stable' # Using default stable
           cache: true
 
       - name: Install dependencies
@@ -82,9 +82,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # 7. Log why it skipped (Corrected Syntax)
+      # 7. Log why it skipped (Fixed Syntax)
       - name: Log skip reason
-        if: env.SKIP_RELEASE == 'true' || env.TAG_EXISTS == 'true'
+        if: always() && (env.SKIP_RELEASE == 'true' || env.TAG_EXISTS == 'true')
         run: |
           if [ "${{ env.SKIP_RELEASE }}" = "true" ]; then
             echo "Skipped: ${{ env.ERROR_MSG }}"
+          elif [ "${{ env.TAG_EXISTS }}" = "true" ]; then
+            echo "Skipped: Tag ${{ env.VERSION }} already exists in the repository."
+          fi
