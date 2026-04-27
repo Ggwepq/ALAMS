@@ -2,59 +2,74 @@
 
 ## Overview
 
-ALAMS uses **SQLite** as its sole data store, accessed via the `sqflite` Flutter package. The database file is named `alams.db` and resides in the platform's designated databases directory (resolved by `getDatabasesPath()`). There is no remote database, no synchronization, and no network dependency — all data lives entirely on the device.
+ALAMS uses **SQLite** as its sole local data store, accessed via the `sqflite` Flutter package. The database file is named `alams.db` and resides in the platform's designated databases directory (resolved by `getDatabasesPath()`).
 
-**Current schema version: 6**
+**Current schema version: 7**
 
-The database is initialized with `openDatabase(..., version: 6, onCreate: _createDB, onUpgrade: ...)`. All schema changes are tracked through incremental version migrations.
+All data lives entirely on the device. Optionally, records are mirrored to a Supabase cloud backend through the `SyncService`, but the SQLite database is always the source of truth for the local device.
 
 ---
 
 ## Entity-Relationship Diagram
 
 ```
-┌─────────────────────────────────┐
-│           employees             │
-├─────────────────────────────────┤
-│ PK  id              INTEGER     │
-│     name            TEXT        │
-│     age             INTEGER     │
-│     sex             TEXT        │
-│     position        TEXT        │
-│     department      TEXT  ──────┼──── (loose ref, not FK) ──┐
-│     emp_id          TEXT        │                            │
-│     email           TEXT        │                            │
-│     is_admin        INTEGER     │                            ▼
-│     facial_embedding TEXT       │     ┌───────────────────────┐
-│     username        TEXT        │     │      departments       │
-│     password        TEXT        │     ├───────────────────────┤
-│     is_deleted      INTEGER     │     │ PK  id    INTEGER      │
-└───────────┬─────────────────────┘     │     name  TEXT UNIQUE  │
-            │ id                        └───────────────────────┘
-            │ 1
-            │
-            │ N
-┌───────────▼─────────────────────┐
-│           attendance            │
-├─────────────────────────────────┤
-│ PK  id              INTEGER     │
-│ FK  employee_id     INTEGER     │
-│     timestamp       TEXT        │
-│     type            TEXT        │
-│     status          TEXT        │
-└─────────────────────────────────┘
+┌─────────────────────────────────────┐
+│            employees                │
+├─────────────────────────────────────┤
+│ PK  id               INTEGER        │
+│     name             TEXT           │
+│     age              INTEGER        │
+│     sex              TEXT           │
+│     position         TEXT           │
+│     department       TEXT  ─────────┼── (loose ref) ──┐
+│     emp_id           TEXT           │                  │
+│     email            TEXT           │                  ▼
+│     is_admin         INTEGER        │  ┌───────────────────────┐
+│     facial_embedding TEXT           │  │      departments      │
+│     username         TEXT           │  ├───────────────────────┤
+│     password         TEXT           │  │ PK  id    INTEGER     │
+│     is_deleted       INTEGER        │  │     name  TEXT UNIQUE │
+└──────────────┬──────────────────────┘  └───────────────────────┘
+               │ id (1)
+               │
+               │ (N)
+┌──────────────▼──────────────────────┐
+│           attendance                │
+├─────────────────────────────────────┤
+│ PK  id           INTEGER            │
+│ FK  employee_id  INTEGER            │
+│     timestamp    TEXT               │
+│     type         TEXT               │
+│     status       TEXT               │
+└─────────────────────────────────────┘
 
-┌─────────────────────────────────┐
-│         system_settings         │
-├─────────────────────────────────┤
-│ PK  key             TEXT        │
-│     value           TEXT        │
-└─────────────────────────────────┘
+┌─────────────────────────────────────┐
+│         system_settings             │
+├─────────────────────────────────────┤
+│ PK  key    TEXT                     │
+│     value  TEXT                     │
+└─────────────────────────────────────┘
+
+┌─────────────────────────────────────┐
+│          login_attempts             │
+├─────────────────────────────────────┤
+│ PK  id         INTEGER              │
+│     username   TEXT                 │
+│     timestamp  TEXT                 │
+│     succeeded  INTEGER              │
+└─────────────────────────────────────┘
+
+┌─────────────────────────────────────┐
+│           sync_queue                │
+├─────────────────────────────────────┤
+│ PK  id          INTEGER             │
+│     table_name  TEXT                │
+│     operation   TEXT                │
+│     record_id   INTEGER             │
+│     payload     TEXT (JSON)         │
+│     created_at  TEXT                │
+└─────────────────────────────────────┘
 ```
-
-**Relationships:**
-- `attendance.employee_id` → `employees.id` (declared `FOREIGN KEY`, cascade behavior not explicitly set — SQLite enforces this only when `PRAGMA foreign_keys = ON` is active)
-- `employees.department` → `departments.name` (loose string reference, not a true FK — intentional for simplicity and to allow historical records to survive department renames/deletions)
 
 ---
 
@@ -82,33 +97,33 @@ CREATE TABLE employees (
 );
 ```
 
-| Column | Type | Constraints | Description |
-|--------|------|-------------|-------------|
-| `id` | INTEGER | PK, AUTOINCREMENT | Internal surrogate key |
-| `name` | TEXT | NOT NULL | Full display name |
-| `age` | INTEGER | NOT NULL | Age in years |
-| `sex` | TEXT | NOT NULL | `'Male'`, `'Female'`, or `'Other'` |
-| `position` | TEXT | NOT NULL | Job title or role label |
-| `department` | TEXT | NOT NULL | Department name string |
-| `emp_id` | TEXT | NOT NULL | Human-readable employee code (e.g., `EMP-001`) |
-| `email` | TEXT | NOT NULL, DEFAULT `""` | Employee email address |
-| `is_admin` | INTEGER | NOT NULL | `1` = administrator, `0` = regular employee |
-| `facial_embedding` | TEXT | NOT NULL | Comma-separated 128-dim float vector (e.g., `"0.123,0.456,..."`) |
-| `username` | TEXT | nullable | Login username; only meaningful for admins |
-| `password` | TEXT | nullable | Login password (plaintext — see security note) |
-| `is_deleted` | INTEGER | NOT NULL, DEFAULT `0` | `1` = soft-deleted, excluded from normal queries |
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | INTEGER PK | Internal surrogate key |
+| `name` | TEXT | Full display name |
+| `age` | INTEGER | Age in years |
+| `sex` | TEXT | `'Male'`, `'Female'`, or `'Other'` |
+| `position` | TEXT | Job title or role label |
+| `department` | TEXT | Department name string (denormalized) |
+| `emp_id` | TEXT | Human-readable code (e.g., `DEV-001`) |
+| `email` | TEXT | Employee email address |
+| `is_admin` | INTEGER | `1` = administrator, `0` = employee |
+| `facial_embedding` | TEXT | Comma-separated 128 floats (the averaged 5-pose master embedding) |
+| `username` | TEXT | Login username; only populated for admins |
+| `password` | TEXT | PBKDF2-SHA256 hash string (`pbkdf2$10000$<salt>$<hash>`) |
+| `is_deleted` | INTEGER | `1` = soft-deleted; excluded from active queries |
 
 **Notes:**
-- `facial_embedding` is stored as a delimited string rather than a BLOB for simplicity. On read, it is parsed back to `List<double>` in `Employee.fromMap()`.
-- The `username` and `password` fields are only populated for employees with `is_admin = 1`. Regular employees authenticate by face, not credentials.
-- `is_deleted = 1` records are excluded from `getAllEmployees()` and `getEmployeeCount()` but are preserved for attendance history integrity.
-- **Security note:** Passwords are stored as plaintext. A production deployment should use a hashing algorithm (e.g., SHA-256 with per-record salt) before storing credentials.
+- `facial_embedding` is stored as a delimited string, parsed back to `List<double>` in `Employee.fromMap()`.
+- `username` / `password` are only populated for `is_admin = 1` employees.
+- `is_deleted = 1` rows are excluded from `getAllEmployees()` and all dashboard counts, but are joined via `LEFT JOIN` in reports.
+- Passwords are stored as PBKDF2 hashes. Legacy plaintext passwords are migrated automatically on first login.
 
 ---
 
 ### `attendance`
 
-Records every individual attendance event (time in and time out).
+Records every individual attendance event.
 
 ```sql
 CREATE TABLE attendance (
@@ -116,38 +131,36 @@ CREATE TABLE attendance (
   employee_id  INTEGER NOT NULL,
   timestamp    TEXT    NOT NULL,
   type         TEXT    NOT NULL,
-  status       TEXT    NOT NULL DEFAULT "Normal",
+  status       TEXT    NOT NULL DEFAULT 'Normal',
   FOREIGN KEY (employee_id) REFERENCES employees (id)
 );
 ```
 
-| Column | Type | Constraints | Description |
-|--------|------|-------------|-------------|
-| `id` | INTEGER | PK, AUTOINCREMENT | Surrogate key |
-| `employee_id` | INTEGER | NOT NULL, FK → employees.id | The employee this event belongs to |
-| `timestamp` | TEXT | NOT NULL | ISO 8601 datetime string (e.g., `"2026-04-19T08:02:44.123"`) |
-| `type` | TEXT | NOT NULL | `'IN'` or `'OUT'` |
-| `status` | TEXT | NOT NULL, DEFAULT `"Normal"` | Computed classification (see below) |
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | INTEGER PK | Surrogate key |
+| `employee_id` | INTEGER FK | References `employees.id` |
+| `timestamp` | TEXT | ISO 8601 datetime string (e.g., `2026-04-28T08:02:44.123`) |
+| `type` | TEXT | `'IN'` or `'OUT'` |
+| `status` | TEXT | Computed classification at write time (see below) |
 
 **Status value domain:**
 
-| Status | Set When |
-|--------|---------|
-| `'On Time'` | `type = 'IN'` and current time ≤ `work_start` setting |
-| `'Late'` | `type = 'IN'` and current time > `work_start` setting |
-| `'Early Out'` | `type = 'OUT'` and current time < `work_end` setting |
-| `'Regular Out'` | `type = 'OUT'` and current time ≥ `work_end` setting |
-| `'Normal'` | Default / legacy records before status feature was added (schema v5) |
+| Status | Condition |
+|--------|-----------|
+| `'On Time'` | `type = 'IN'` and time ≤ `work_start` setting |
+| `'Late'` | `type = 'IN'` and time > `work_start` setting |
+| `'Early Out'` | `type = 'OUT'` and time < `work_end` setting |
+| `'Regular Out'` | `type = 'OUT'` and time ≥ `work_end` setting |
+| `'Normal'` | Default / legacy records before status feature (schema v5) |
 
-Status is **computed at write time** inside `DatabaseService.insertAttendance()`, not in the UI layer.
-
-**Design note:** Storing status as a denormalized field rather than computing it on read avoids the need to re-evaluate historical records if work hours settings change. The status captured reflects the policy in effect at the time the record was written.
+Status is **computed at write time** inside `DatabaseService.insertAttendance()`. This ensures changing work hours settings in the future does not retroactively alter historical records.
 
 ---
 
 ### `departments`
 
-A reference list of valid department names used in the employee registration form.
+Reference list of department names.
 
 ```sql
 CREATE TABLE departments (
@@ -156,20 +169,13 @@ CREATE TABLE departments (
 );
 ```
 
-| Column | Type | Constraints | Description |
-|--------|------|-------------|-------------|
-| `id` | INTEGER | PK, AUTOINCREMENT | Surrogate key |
-| `name` | TEXT | NOT NULL, UNIQUE | Department display name |
-
-**Seed data:** A single `'General'` department is inserted at schema creation time and on `onUpgrade` when the `departments` table is first added (v3).
-
-**Design note:** Departments are referenced by name string in `employees.department`, not by foreign key ID. This is a deliberate trade-off: it avoids cascading update complexity and allows the department record to be renamed or deleted without breaking existing employee records. The employee retains whatever department name string they had at registration time.
+Seeded with `'General'` at schema creation. Department names are referenced by string in `employees.department` (not by FK) so that department renames/deletions don't break historical employee records.
 
 ---
 
 ### `system_settings`
 
-A key-value store for application-level configuration.
+Key-value store for configurable system parameters.
 
 ```sql
 CREATE TABLE system_settings (
@@ -178,19 +184,69 @@ CREATE TABLE system_settings (
 );
 ```
 
-| Column | Type | Constraints | Description |
-|--------|------|-------------|-------------|
-| `key` | TEXT | PK | Setting identifier string |
-| `value` | TEXT | NOT NULL | Setting value as string |
+**All settings and defaults:**
 
-**Seed data (inserted at schema creation and v6 migration):**
+| Key | Default | Description |
+|-----|---------|-------------|
+| `work_start` | `08:00` | Work start time (HH:mm 24-hour). Determines On Time vs. Late. |
+| `work_end` | `17:00` | Work end time (HH:mm 24-hour). Determines Early Out vs. Regular Out. |
+| `grace_period` | `60` | Minutes after `work_start` before employees are counted as Absent on the dashboard. |
+| `device_code` | Random 4-char | Kiosk identifier used as prefix for auto-generated `emp_id`. |
+| `id_offset` | Random int | Numeric offset applied to auto-generated employee IDs to prevent ID collisions across multiple kiosk devices. |
 
-| Key | Default Value | Meaning |
-|-----|--------------|---------|
-| `work_start` | `"08:00"` | Work start time in `HH:mm` 24-hour format |
-| `work_end` | `"17:00"` | Work end time in `HH:mm` 24-hour format |
+Settings are read via `DatabaseService.getSetting(key, defaultValue)` and written via `updateSetting(key, value)` using `ConflictAlgorithm.replace` (UPSERT). All settings changes are also enqueued to `sync_queue` for cloud propagation.
 
-Settings are read by `DatabaseService.getSetting(key, defaultValue)` and written by `updateSetting(key, value)`, using `ConflictAlgorithm.replace` (UPSERT behavior).
+---
+
+### `login_attempts`
+
+Audit table for admin login brute-force protection.
+
+```sql
+CREATE TABLE login_attempts (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  username   TEXT    NOT NULL,
+  timestamp  TEXT    NOT NULL,
+  succeeded  INTEGER NOT NULL DEFAULT 0
+);
+```
+
+| Column | Description |
+|--------|-------------|
+| `username` | The username that was attempted |
+| `timestamp` | ISO 8601 datetime of the attempt |
+| `succeeded` | `1` = successful login, `0` = failed |
+
+**Logic:** Before verifying any password, `validateAdmin()` counts rows where `succeeded = 0` and `timestamp > (now - 15 minutes)` for the given username. If count ≥ 5, login is rejected without attempting password verification. Every attempt (success or failure) inserts a new row regardless.
+
+This table is **not synced to Supabase** — it is device-local security state only.
+
+---
+
+### `sync_queue`
+
+Outbound sync buffer for Supabase writes.
+
+```sql
+CREATE TABLE sync_queue (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  table_name  TEXT    NOT NULL,
+  operation   TEXT    NOT NULL,
+  record_id   INTEGER NOT NULL,
+  payload     TEXT    NOT NULL,
+  created_at  TEXT    NOT NULL
+);
+```
+
+| Column | Description |
+|--------|-------------|
+| `table_name` | Target Supabase table (e.g., `'employees'`, `'attendance'`) |
+| `operation` | `'INSERT'`, `'UPDATE'`, or `'DELETE'` |
+| `record_id` | Local SQLite row ID of the affected record |
+| `payload` | Full record as JSON string |
+| `created_at` | ISO 8601 timestamp of when the operation was enqueued |
+
+`SyncService.syncNow()` processes rows in ascending `id` order. Successfully synced rows are deleted. On connectivity restore, the queue is replayed in order, preserving causality.
 
 ---
 
@@ -202,10 +258,11 @@ Settings are read by `DatabaseService.getSetting(key, defaultValue)` and written
 | 2 | Added to `employees`: `age`, `sex`, `position`, `emp_id`, `is_admin` |
 | 3 | Added to `employees`: `department`, `username`, `password`. Created `departments` table, seeded `'General'` |
 | 4 | Added to `employees`: `email` (DEFAULT `""`) |
-| 5 | Added to `employees`: `is_deleted` (DEFAULT `0`). Added to `attendance`: `status` (DEFAULT `"Normal"`) |
+| 5 | Added to `employees`: `is_deleted` (DEFAULT `0`). Added to `attendance`: `status` (DEFAULT `'Normal'`) |
 | 6 | Created `system_settings` table. Seeded `work_start = "08:00"` and `work_end = "17:00"` |
+| 7 | Added `grace_period`, `device_code`, `id_offset` to `system_settings`. Created `login_attempts` table. Created `sync_queue` table. |
 
-All migrations are forward-only. Downgrade is not supported — this is standard for SQLite-based mobile apps.
+All migrations are forward-only.
 
 ---
 
@@ -215,32 +272,33 @@ All migrations are forward-only. Downgrade is not supported — this is standard
 
 ```sql
 SELECT * FROM employees
-WHERE is_admin = 0 AND is_deleted = 0
-AND id IN (
-  SELECT a.employee_id
-  FROM attendance a
-  INNER JOIN (
-    SELECT employee_id, MAX(timestamp) AS max_ts
-    FROM attendance
-    WHERE timestamp LIKE '2026-04-19%'
-    GROUP BY employee_id
-  ) latest
-  ON a.employee_id = latest.employee_id
-  AND a.timestamp = latest.max_ts
-  WHERE a.type = 'IN'
-);
+WHERE (is_admin != 1 OR is_admin IS NULL)
+  AND (is_deleted = 0 OR is_deleted IS NULL)
+  AND id IN (
+    SELECT a.employee_id
+    FROM attendance a
+    INNER JOIN (
+      SELECT employee_id, MAX(timestamp) AS max_ts
+      FROM attendance WHERE timestamp LIKE '2026-04-28%'
+      GROUP BY employee_id
+    ) latest
+    ON a.employee_id = latest.employee_id
+    AND a.timestamp = latest.max_ts
+    WHERE a.type = 'IN'
+  );
 ```
 
-### Get employees absent today (zero logs today)
+### Get employees absent today (after grace period)
 
 ```sql
+-- Only runs if NOW > work_start + grace_period (checked in Dart before executing)
 SELECT * FROM employees
-WHERE is_admin = 0 AND is_deleted = 0
-AND id NOT IN (
-  SELECT DISTINCT employee_id
-  FROM attendance
-  WHERE timestamp LIKE '2026-04-19%'
-);
+WHERE (is_admin != 1 OR is_admin IS NULL)
+  AND (is_deleted = 0 OR is_deleted IS NULL)
+  AND id NOT IN (
+    SELECT DISTINCT employee_id FROM attendance
+    WHERE timestamp LIKE '2026-04-28%'
+  );
 ```
 
 ### Get today's attendance logs with employee names
@@ -251,18 +309,19 @@ SELECT
   a.employee_id,
   a.timestamp,
   a.type,
-  e.name     AS employee_name,
-  e.emp_id   AS employee_code,
+  a.status,
+  e.name       AS employee_name,
+  e.emp_id     AS employee_code,
   e.is_deleted AS employee_deleted
 FROM attendance a
 LEFT JOIN employees e ON a.employee_id = e.id
-WHERE a.timestamp LIKE '2026-04-19%'
+WHERE a.timestamp LIKE '2026-04-28%'
 ORDER BY a.timestamp DESC;
 ```
 
-Note: `LEFT JOIN` (not `INNER JOIN`) is used so that attendance records from soft-deleted employees are still returned. `is_deleted` is included in the projection so the UI can display `[Deleted Employee]` labels appropriately.
+`LEFT JOIN` ensures records from soft-deleted employees are still returned; `is_deleted` is checked in Dart to render `[Deleted Employee]`.
 
-### Get the last attendance record for an employee (for auto IN/OUT detection)
+### Get last attendance record for an employee (auto IN/OUT detection)
 
 ```sql
 SELECT * FROM attendance
@@ -271,12 +330,29 @@ ORDER BY timestamp DESC
 LIMIT 1;
 ```
 
-### Validate admin credentials
+### Count recent failed login attempts (brute-force check)
 
 ```sql
-SELECT * FROM employees
-WHERE username = ? AND password = ? AND is_admin = 1
-LIMIT 1;
+SELECT COUNT(*) FROM login_attempts
+WHERE username = ? AND succeeded = 0 AND timestamp > ?;
+-- second ? = (now - 15 minutes) as ISO 8601 string
+```
+
+### Insert attendance with status classification (computed in Dart before insert)
+
+```dart
+// Status computed in DatabaseService.insertAttendance():
+final workStart = await getSetting('work_start', '08:00');
+final workEnd   = await getSetting('work_end', '17:00');
+final now       = DateTime.now();
+String status;
+
+if (attendance.type == 'IN') {
+  status = now.isAfter(workStartDateTime) ? 'Late' : 'On Time';
+} else {
+  status = now.isBefore(workEndDateTime) ? 'Early Out' : 'Regular Out';
+}
+// Then insert with computed status value
 ```
 
 ---
@@ -284,16 +360,22 @@ LIMIT 1;
 ## Data Integrity Design Decisions
 
 **Why soft deletes?**
-Hard-deleting an employee row would orphan all their `attendance` records (FK violation or dangling employee_id). Soft deletes preserve the full audit trail while excluding the employee from active lists. The `is_deleted` flag is filtered at the query level in `getAllEmployees()`.
+Hard-deleting an employee would orphan their `attendance` records. Soft deletes preserve the full audit trail. The `is_deleted` flag is filtered at the query level in all active employee queries.
 
 **Why store `facial_embedding` as TEXT?**
-SQLite supports BLOB columns, but handling binary float arrays as BLOBs in Dart/sqflite adds complexity (byte packing/unpacking). Storing as comma-separated string is human-readable for debugging, trivially serializable/deserializable, and fast enough for 128 floats. The tradeoff is slightly larger storage per record (~600 bytes vs ~512 bytes as binary float32).
+Comma-separated float strings are human-readable for debugging, trivially serializable from Dart's `List<double>`, and fast enough for 128 floats (~600 bytes per record).
 
-**Why is `department` a string in `employees` rather than a FK to `departments.id`?**
-This makes department renames and deletions safe without cascading updates to all employees. The `departments` table serves as a reference picker in the UI, not a strict relational constraint. Historical records accurately reflect the department name at time of registration.
+**Why is `department` a string in `employees` rather than a FK?**
+Department renames and deletions are safe without cascading updates. Historical records accurately reflect the department name at time of registration.
 
 **Why is `timestamp` stored as TEXT?**
-SQLite has no native datetime type — all date/time values are stored as TEXT (ISO 8601), REAL (Julian Day), or INTEGER (Unix epoch). ISO 8601 strings are human-readable, sort lexicographically (allowing `LIKE '2026-04-19%'` date filtering), and map directly to Dart's `DateTime.toIso8601String()` without conversion overhead.
+ISO 8601 strings sort lexicographically (enabling `LIKE '2026-04-28%'` date filtering), map directly to Dart's `DateTime.toIso8601String()`, and are human-readable.
 
 **Why is `status` computed and stored at write time?**
-If status were computed at read time from the current `work_start`/`work_end` settings, changing those settings would retroactively alter the meaning of all historical records. Storing status at write time captures the policy in effect when the attendance was recorded, providing an accurate and immutable historical record.
+If status were computed on read from current `work_start`/`work_end` settings, changing those settings would retroactively alter all historical records. Write-time computation captures the policy in effect at the time of each scan.
+
+**Why is `login_attempts` not synced?**
+Login attempts are device-local security state. Syncing them would create race conditions in lockout counting across devices and could allow an attacker to reset attempts by triggering a sync from another device.
+
+**Why a `sync_queue` instead of syncing directly on write?**
+Direct sync fails silently when offline. A queue provides durability — operations survive connectivity loss, device sleep, and app restarts. Queue processing in ascending ID order preserves the causal ordering of operations (e.g., an employee must be inserted before their attendance records can be synced).

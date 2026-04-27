@@ -10,24 +10,27 @@
 6. [Feature Breakdown](#6-feature-breakdown)
 7. [Face Recognition Pipeline](#7-face-recognition-pipeline)
 8. [Liveness Detection Pipeline](#8-liveness-detection-pipeline)
-9. [State Management Architecture](#9-state-management-architecture)
-10. [Tech Stack & Dependencies](#10-tech-stack--dependencies)
-11. [Security Considerations](#11-security-considerations)
+9. [Neural Anti-Spoofing (NCNN MiniFASNet)](#9-neural-anti-spoofing-ncnn-minifasnet)
+10. [Cloud Sync Architecture (Supabase)](#10-cloud-sync-architecture-supabase)
+11. [State Management Architecture](#11-state-management-architecture)
+12. [Tech Stack & Dependencies](#12-tech-stack--dependencies)
+13. [Security Considerations](#13-security-considerations)
 
 ---
 
 ## 1. Problem Statement
 
-Traditional attendance systems — biometric fingerprint scanners, PIN pads, RFID cards — are vulnerable to **buddy punching**: a practice where an employee marks a coworker as present when they are actually absent. Research (The New Indian Express, 2024) documents how this lack of anti-spoofing measures results in substantial financial losses for organizations.
+Traditional attendance systems — biometric fingerprint scanners, PIN pads, RFID cards — are vulnerable to **buddy punching**: a practice where an employee marks a coworker as present when they are actually absent.
 
 The root cause is that most systems authenticate *credentials* (a card, a PIN, a fingerprint template on an insecure reader) rather than verifying a *living person* in real time. A photograph held up to a camera, or a rubber fingerprint replica, can defeat many consumer-grade biometric systems.
 
 ALAMS addresses this by combining:
 
 - **Face recognition** — Who is this person?
-- **Liveness detection** — Are they physically present, alive, and not a spoofed artifact?
+- **Active liveness detection** — Are they physically present and performing actions on command?
+- **Passive neural anti-spoofing** — Is this a real human face or a spoofed artifact?
 
-Both checks must pass before any attendance record is written.
+All three checks must pass independently before any attendance record is written.
 
 ---
 
@@ -36,14 +39,17 @@ Both checks must pass before any attendance record is written.
 **Primary goal:** Prevent fraudulent attendance entries by requiring a verified living face at every check-in and check-out event.
 
 **Secondary goals:**
-- Provide accurate, timestamped attendance records with status classification.
-- Give administrators actionable dashboards and reports.
-- Operate entirely offline; no reliance on external APIs or cloud services.
+- Provide accurate, timestamped attendance records with automatic status classification.
+- Give administrators actionable dashboards, filtered lists, and full reports.
+- Operate entirely offline; no reliance on external APIs for core functionality.
+- Support optional cloud sync for multi-device deployments.
 - Preserve data integrity even when employees leave (soft deletes).
 
-**Design philosophy — Privacy First:** Facial embeddings (128-dimensional float vectors) are stored in the local SQLite database. The raw face images are never persisted. Even if the device is physically compromised, a facial embedding cannot be trivially reverse-engineered into a photograph of the employee.
+**Design philosophy — Privacy First:** Facial embeddings (128-dimensional float vectors) are stored in the local SQLite database. Raw face images are never persisted at any point. Even if the device is physically compromised, a facial embedding cannot be trivially reverse-engineered into a photograph of the employee.
 
-**Design philosophy — Kiosk Orientation:** The app forces portrait-only orientation at launch (`SystemChrome.setPreferredOrientations`) and hides system UI overlays for a clean kiosk feel. It is designed to run on a dedicated Android device mounted at an entrance, not as a general-purpose personal app.
+**Design philosophy — Kiosk Orientation:** The app forces portrait-only orientation at launch and hides system UI overlays for a clean kiosk feel. It is designed to run on a dedicated Android device mounted at an entrance.
+
+**Design philosophy — Offline First, Sync Later:** Every feature — registration, scanning, reports, admin controls — works fully without network access. Cloud sync (Supabase) is a layer on top that pushes local changes and subscribes to remote changes, providing multi-device consistency without creating a network dependency.
 
 ---
 
@@ -55,29 +61,31 @@ ALAMS follows a **feature-first layered architecture** within a monorepo Flutter
 ┌─────────────────────────────────────────────────────────────┐
 │                        PRESENTATION                          │
 │   Screens (StatefulWidget / ConsumerWidget)                  │
-│   Feature-scoped Providers (Riverpod AsyncNotifierProvider)  │
+│   Feature-scoped Providers (Riverpod FutureProvider)         │
 └─────────────────────────────────┬───────────────────────────┘
                                   │
 ┌─────────────────────────────────▼───────────────────────────┐
 │                         DOMAIN / SERVICES                     │
 │   FaceRecognitionService  (TFLite inference, cosine match)   │
 │   LivenessService         (ML Kit challenges, passive checks) │
+│   NcnnAntiSpoofService    (Native NCNN MiniFASNet, JNI)      │
+│   SyncService             (Supabase queue + realtime)        │
 │   DatabaseService         (singleton, SQLite CRUD)           │
 └─────────────────────────────────┬───────────────────────────┘
                                   │
 ┌─────────────────────────────────▼───────────────────────────┐
 │                           DATA LAYER                          │
-│   SQLite (sqflite) — alams.db                                │
-│   Tables: employees, attendance, departments, system_settings│
+│   SQLite (sqflite) — alams.db (schema v7)                    │
+│   Tables: employees, attendance, departments,                 │
+│           system_settings, login_attempts, sync_queue        │
 │   Models: Employee, Attendance, Department                   │
+│   Cloud mirror: Supabase (optional)                          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**No repository layer** is used between the service and the database — `DatabaseService` is a singleton that acts as both the repository and the data access object. This is pragmatic for the project's scope and avoids unnecessary abstraction overhead for a local-only app.
+**No repository layer** is used between the service and the database — `DatabaseService` is a singleton that acts as both the repository and the data access object.
 
-**No dependency injection framework** — services are either singletons (`DatabaseService.instance`, `FaceRecognitionService.instance`) or created locally inside screen `State` objects that own their lifecycle (`LivenessService`, `FaceDetector`, `CameraController`).
-
-**Routing** is name-based via `onGenerateRoute` in `MaterialApp`. Arguments are passed as typed maps or model instances through `settings.arguments`.
+**Routing** is name-based via `onGenerateRoute` in `MaterialApp`. Arguments are passed as typed maps or model instances through `settings.arguments`. `PageRouteBuilder` routes must explicitly pass `settings:` to preserve arguments through the custom transition.
 
 ---
 
@@ -85,19 +93,20 @@ ALAMS follows a **feature-first layered architecture** within a monorepo Flutter
 
 ### Employee (Anonymous Kiosk User)
 
-Employees interact with the system purely through the camera. They do not log in. The system identifies *them* — they do not identify themselves. The kiosk home screen (`SelectionScreen`) is the default entry point after setup.
+Employees interact with the system purely through the camera. They do not log in. The system identifies *them* — they do not identify themselves.
 
 ### Administrator
 
-Admins log in via username/password on the `AdminLoginScreen`. Admin status is stored as a flag (`is_admin = 1`) on the `employees` table. The first registration in the system is automatically granted admin rights, enforced by `RootGuardian`.
+Admins log in via username/password on the `AdminLoginScreen`. Admin status is stored as `is_admin = 1` on the `employees` table. The first registration in the system is automatically granted admin rights, enforced by `RootGuardian`.
 
 Admins can:
-- Register new employees (with facial capture)
+- Register new employees (guided 5-pose facial capture)
 - Edit / soft-delete employees
+- View employees filtered by status (At Work, Absent) or department
 - View and manage departments
-- View all attendance logs and reports
-- Configure work start/end hours
+- View full attendance logs and reports (filterable by name, type, date)
 - View individual employee attendance history
+- Configure work start/end hours, grace period, and watermark toggle
 
 ---
 
@@ -131,30 +140,42 @@ CameraScreen (mode: SCAN)
     → Front camera activates
     → Frame stream begins (throttled to 400ms intervals)
     ↓
-Per-Frame Pipeline:
+Per-Frame Pipeline (runs in parallel):
+    ── THREAD A: LivenessService ──────────────────────────────
     1. Google ML Kit detects face in frame
-    2. LivenessService processes frame:
-       a. Single-face guard — multiple faces → reset
-       b. Face size guard — too small or too large → prompt to reposition
-       c. Stability check (8 stable frames required)
-       d. 3 random challenges issued from CSPRNG-shuffled pool
-          (e.g., blink → turn left → smile)
-       e. Passive spoof checks run every challenge frame
-          (staticness, aspect ratio, eye symmetry)
-       f. Challenges pass → LivenessState.passed (session token captured)
-       g. Timeout (20s) or passive fail streak (8) → LivenessState.failed
-    3. FaceRecognitionService (session token verified before proceeding):
-       a. YUV420 → RGB conversion (compute isolate)
-       b. Resize to 160×160, L2-normalise embedding
-       c. FaceNet inference → 128-dim embedding vector
-       d. Two-threshold cosine distance match:
-          primary threshold 0.40 + margin guard 0.08
-       e. Match found → RecognitionResult
+    2. Single-face guard — multiple faces → reset
+    3. Face size guard — too small/large → prompt to reposition
+    4. Stability check (8 stable frames required)
+    5. 3 random challenges issued (CSPRNG-shuffled pool)
+       (blink / smile / mouth open / turn left / turn right)
+    6. Passive spoof checks every challenge frame
+       (staticness, aspect ratio, eye symmetry)
+    7. All 3 challenges pass → LivenessState.passed + session token
+    8. Timeout (20s) or passive fail streak (8) → LivenessState.failed
+       → 8s cooldown enforced
+
+    ── THREAD B: NcnnAntiSpoofService ────────────────────────
+    1. Each frame converted YUV420 → NV21 byte array
+    2. Sent to native NCNN engine via MethodChannel JNI
+    3. MiniFASNet scores frame: confidence float [0.0 – 1.0]
+    4. confidence < 0.80 → spoof flag incremented
+    5. Spoof flags accumulate → hard fail on repeated detection
+    ──────────────────────────────────────────────────────────
+
+    ↓ (both pass)
+    FaceRecognitionService (session token verified):
+    a. YUV420 → RGB conversion (compute isolate)
+    b. Resize to 160×160, L2-normalise embedding
+    c. FaceNet inference → 128-dim embedding vector
+    d. Two-threshold cosine distance match:
+       primary threshold 0.40 + margin guard 0.08
+    e. Match found → RecognitionResult
     ↓
 ActionScreen (employee identified)
     → Auto-detects TIME IN or TIME OUT based on last log
     → Employee confirms (or changes action)
     → Attendance record written with status classification
+    → SyncService.enqueue() called for cloud push
     ↓
 Return to CameraScreen (ready for next employee)
 ```
@@ -168,16 +189,18 @@ SelectionScreen
 AdminLoginScreen
     → username + password submitted
     → validateAdmin():
-        1. Check login_attempts table — locked out? → show lockout message
+        1. Check login_attempts table — locked out? → show lockout + wait time
         2. Fetch admin row by username only
         3. PBKDF2-SHA256 verification in background isolate
-        4. Record attempt in login_attempts
-        5. 5 failures in 15 min → 15-minute lockout
+        4. Record attempt in login_attempts (success or failure)
+        5. 5 failures in 15 min → 15-minute lockout enforced
     ↓ (success)
 AdminDashboard
-    → At Work count, Absent count, Total Personnel
-    → Quick Actions: Camera, Register Employee
-    → Menu: Employees, Attendance Logs, Departments, Reports, Settings
+    → At Work count (tap → filtered employee list)
+    → Absent count (tap → filtered employee list)
+    → Total Personnel (tap → full employee list)
+    → Quick Actions: Register Employee, Edit Admin Profile
+    → Menu: Employees, Reports, Departments, Settings
 ```
 
 ### 5.4 Employee Registration (Admin-Initiated)
@@ -186,110 +209,121 @@ AdminDashboard
 AdminDashboard → Register Employee
     ↓
 RegistrationScreen
-    Step 1: Enter Profile (name, ID, age, sex, department, position, email)
+    Step 1: Enter Profile
+        Name, Employee ID (auto-generated or custom), Age, Sex,
+        Position, Department (dropdown from departments table), Email
     Step 2: Guided Face Capture
         Pose 1: Front (look straight)
         Pose 2: Turn Left
         Pose 3: Turn Right
         Pose 4: Tilt Up
         Pose 5: Blink
-        → Each pose captures a face frame, generates embedding
+        → Each pose captures frame, generates FaceNet embedding
+        → Duplicate check against all existing faces (threshold 0.35)
         → All 5 embeddings averaged → single master embedding stored
     Step 3: Save to DB
+        → SyncService.enqueue() → Supabase push when online
     ↓
-EmployeeListScreen (refreshed)
+EmployeeListScreen (providers invalidated → auto-refresh)
 ```
 
-### 5.5 Editing an Employee
+### 5.5 Dashboard Filtered Navigation
 
-Admin can tap any employee in `EmployeeListScreen` to navigate to `RegistrationScreen` with the `editEmployee` pre-filled. The pose capture flow re-runs to capture a fresh embedding. The existing DB record is updated (not replaced).
+```
+AdminDashboard
+    → Tap "At Work" card
+        → Navigator.pushNamed('/employee_list',
+            arguments: {'status': 'working'})
+        → EmployeeListScreen reads arguments via
+            ModalRoute.of(context)?.settings.arguments
+        → Filters employee list to only those with latest log = IN today
+
+    → Tap "Absent" card
+        → arguments: {'status': 'absent'}
+        → Filters to employees with no log today (after grace period)
+
+    → Tap department in DepartmentManagementScreen
+        → arguments: {'department': dept.name}
+        → Filters to employees in that department only
+
+    [Note: PageRouteBuilder for /employee_list must pass
+     settings: settings to preserve arguments through the
+     custom slide transition. This is the fix applied in main.dart.]
+```
 
 ---
 
 ## 6. Feature Breakdown
 
-### 6.1 Automated Time In / Time Out
+### 6.1 Kiosk Home Screen (SelectionScreen)
 
-The system auto-detects whether the employee should be clocking IN or OUT by querying `getLastAttendanceForEmployee()`. If their last record was an `IN`, the system defaults to `OUT`, and vice versa. The employee can override this on the `ActionScreen`.
-
-**Status classification** is applied at write time in `DatabaseService.insertAttendance()`:
-
-| Event | Condition | Status |
-|-------|-----------|--------|
-| Time IN | Before or at work_start time | On Time |
-| Time IN | After work_start time | Late |
-| Time OUT | Before work_end time | Early Out |
-| Time OUT | At or after work_end time | Regular Out |
-
-Work start/end hours are configurable by admins from the `SettingsScreen` and stored in the `system_settings` table.
+The default entry point after setup. Displays the current date and two action buttons. No employee credentials are required here — identity is established by the camera.
 
 ### 6.2 Admin Dashboard
 
 The dashboard (`AdminDashboard`) provides three real-time metrics queried from the database:
 
 - **At Work** — Employees whose latest attendance log today is `IN`
-- **Absent** — Employees with zero attendance logs today
+- **Absent** — Employees with zero attendance logs today, after the grace period has elapsed
 - **Total Personnel** — Active (non-deleted, non-admin) employees
 
-These are exposed as Riverpod providers (`currentlyWorkingProvider`, `absentTodayProvider`, `employeesProvider`) so they refresh reactively.
+Each metric card is tappable and navigates to a **filtered** `EmployeeListScreen`. Arguments are passed through `Navigator.pushNamed` and read from `ModalRoute.of(context)?.settings.arguments`.
 
-### 6.3 Reports Screen
+The filtering is performed client-side in `EmployeeListScreen` by combining `employeesProvider` (all employees) with `attendanceLogsTodayProvider` (today's logs) and computing working/absent sets locally.
 
-`ReportsScreen` shows all attendance logs joined with employee names. It supports:
+### 6.3 Employee List Screen (EmployeeListScreen)
 
-- **Search** by employee name
-- **Filter** by type (All, IN, OUT)
-- **Filter** by date (picker or default to today)
+A unified screen for browsing employees. Supports:
+- **Real-time search** by name
+- **Status filter** (`working` or `absent`) passed via navigation arguments
+- **Department filter** passed via navigation arguments
+- **Clear filters** button when any filter is active
+- **Pull to refresh** (invalidates `employeesProvider` and `attendanceLogsTodayProvider`)
+- **Delete** employee (with confirmation dialog; invalidates all affected providers immediately)
 
-Logs from deleted employees are retained and labeled `[Deleted Employee]` to preserve historical accuracy.
+### 6.4 Reports Screen
 
-### 6.4 Department Management
+`ReportsScreen` shows all attendance logs joined with employee names. Supports:
+- Search by employee name
+- Filter by type (All, IN, OUT)
+- Filter by date (date picker, defaults to today)
+- Logs from deleted employees retained and labeled `[Deleted Employee]`
 
-`DepartmentManagementScreen` allows full CRUD on departments. Departments are referenced by name string in the `employees` table (denormalized for simplicity). Deleting a department does not cascade-delete employees assigned to it.
+### 6.5 Department Management
 
-### 6.5 Employee Registration with Multi-Pose Embedding
+`DepartmentManagementScreen` supports full CRUD on departments. Tapping a department navigates to `EmployeeListScreen` with a department filter argument. Deleting a department does not cascade-delete employees assigned to it.
 
-The registration flow guides the employee through 5 distinct poses using the front camera and ML Kit face detection:
+### 6.6 Employee Registration with Multi-Pose Embedding
 
-1. **Front** — Baseline, full-face embedding
-2. **Turn Left** — Captures left-angle facial features
-3. **Turn Right** — Captures right-angle features
-4. **Tilt Up** — Captures upward-angle features
-5. **Blink** — Verifies eye openness classification
+5-pose guided capture with real-time ML Kit feedback. Each pose generates a FaceNet embedding. All 5 are averaged into a single 128-dimensional master embedding. The duplicate guard checks the new embedding against all existing faces (threshold 0.35) before saving.
 
-Each pose generates a FaceNet embedding. All embeddings are averaged into a single 128-dimensional vector that is more robust to pose variation than a single front-facing capture.
+### 6.7 Soft Delete
 
-### 6.6 Soft Delete
+Setting `is_deleted = 1` rather than removing the row. All active queries filter `WHERE is_deleted = 0`. Reports use `LEFT JOIN` and include a `is_deleted` column so the UI can display `[Deleted Employee]` for historical records.
 
-Deleting an employee via the admin panel sets `is_deleted = 1` rather than removing the row. This ensures:
+### 6.8 PBKDF2 Password Hashing
 
-- Historical attendance logs remain fully joinable and interpretable.
-- Reports can still display the employee name against their historical records.
-- Accidental deletions can be recovered at the database level.
+Passwords stored as `pbkdf2$10000$<base64salt>$<base64hash>`. All crypto runs in `compute()` isolates. Existing plaintext passwords auto-migrated on first login via `Future.microtask()`.
 
-### 6.7 PBKDF2 Password Hashing
+### 6.9 Admin Login Rate Limiting
 
-Admin passwords are never stored as plaintext. When an admin account is created or edited, the password is hashed using **PBKDF2-HMAC-SHA256** with a randomly generated 16-byte salt and 10,000 iterations. The resulting hash is stored in the format `pbkdf2$10000$<base64salt>$<base64hash>`.
+Every attempt recorded in `login_attempts` with timestamp and success flag. Five failures in 15 minutes → lockout. Remaining attempts displayed. Lockout timer shown. Constant-time comparison used to prevent timing attacks.
 
-The iteration count and salt are embedded in the stored string, making the format self-describing. If the iteration count is increased in a future version, existing hashes remain verifiable using the count they were created with.
+### 6.10 Duplicate Face Enrollment Guard
 
-All hashing and verification operations run inside a **background Dart isolate** via `compute()`. This keeps the UI thread free — login verification takes ~80–120ms on device but appears instant because the loading indicator renders without interruption.
+`checkDuplicateEmbedding()` called before saving any new registration. Uses threshold 0.35 (stricter than live recognition at 0.40). Returns the matching employee name if a duplicate is found, allowing the admin to identify the conflict.
 
-**Existing plaintext passwords** (e.g., accounts created before this feature was introduced) are detected on first login and automatically migrated to a PBKDF2 hash in the background, with no action required from the admin.
+### 6.11 Configurable System Settings
 
-### 6.8 Admin Login Rate Limiting
+| Setting Key | Default | Description |
+|-------------|---------|-------------|
+| `work_start` | `08:00` | Work start time for On Time / Late classification |
+| `work_end` | `17:00` | Work end time for Early Out / Regular Out classification |
+| `grace_period` | `60` | Minutes after `work_start` before absent count begins |
+| `watermark_enabled` | `1` | Toggle device-code watermark overlay |
+| `device_code` | Random 4-char | Human-readable kiosk identifier |
+| `id_offset` | Random int | Offset applied to auto-generated employee IDs for uniqueness across devices |
 
-To prevent brute-force attacks on admin credentials, every login attempt — successful or failed — is recorded in the `login_attempts` table with a timestamp and outcome flag.
-
-Before verifying any password, `validateAdmin()` counts failed attempts for that username within the past 15 minutes. If 5 or more failures are found, the login is rejected immediately with a lockout message — no password comparison is performed.
-
-The `AdminLoginScreen` surfaces this state clearly: remaining attempts are displayed on each failure ("3 attempts remaining before lockout"), and on lockout the form and button are disabled and the remaining wait time is shown. The lockout lifts automatically when the 15-minute window expires.
-
-**Constant-time comparison** is used when verifying hashes — the comparison always takes the same number of operations regardless of where a mismatch occurs, preventing timing-based attacks that could otherwise reveal information about the stored hash byte-by-byte.
-
-### 6.9 Duplicate Face Enrollment Guard
-
-During employee registration, the system checks the new embedding against all existing registered faces before saving. This uses a dedicated `checkDuplicateEmbedding()` method with a stricter distance threshold (0.35) than the live recognition threshold (0.40), reducing the risk of the same person being enrolled under multiple identities.
 
 ---
 
@@ -321,21 +355,19 @@ CameraImage (YUV420)
 RecognitionResult { label, distance, isRecognized }
 ```
 
-**Why cosine distance?** Cosine distance is invariant to the magnitude of the embedding vector, measuring only directional similarity. FaceNet is trained to produce embeddings where identities cluster in angular space, making cosine distance a natural and effective similarity metric.
+**Why cosine distance?** Invariant to embedding vector magnitude; measures directional similarity. FaceNet embeddings cluster by identity in angular space.
 
-**Why L2 normalisation?** Projecting all embeddings onto the unit hypersphere makes cosine distance equal to Euclidean distance, ensuring consistent behaviour across embeddings regardless of how the model's output magnitude varies between inference calls.
+**Why L2 normalisation?** Projects all embeddings onto the unit hypersphere, making cosine distance equal to Euclidean distance and ensuring consistent behaviour regardless of inference output magnitude variation.
 
-**Why the margin guard?** A single threshold allows a face that is slightly closer to employee A than employee B to be recognised as A even if both are far from certain. The margin guard rejects these ambiguous boundary cases — both the best match must be close *and* clearly better than all alternatives.
+**Why the margin guard?** Prevents ambiguous boundary matches — both the best match must be close *and* clearly better than all alternatives.
 
-**Why 0.40 threshold (down from 0.45)?** The tighter threshold reduces false-positive matches. Combined with L2 normalisation and the margin guard, the recognition system is more precise without meaningfully increasing false rejections for legitimate employees in normal lighting.
+**Why 0.40 primary threshold?** Tighter than earlier versions (was 0.45). Reduces false positives. Combined with L2 normalisation and margin guard, precision is maintained without meaningfully increasing false rejections.
 
-**Frame throttling:** The camera image stream is processed at most once every 400ms to balance responsiveness with performance on lower-end Android devices. Frames arriving during a processing window are discarded.
+**Frame throttling:** Processed at most once every 400ms to balance responsiveness with performance on lower-end devices.
 
 ---
 
 ## 8. Liveness Detection Pipeline
-
-Liveness detection prevents spoofing via photographs, printed faces, replay video attacks, and screen-held images.
 
 ```
 Input: raw InputImage from camera stream
@@ -367,12 +399,12 @@ LivenessService.processFrame()
                          │  + passive checks every │
                          │    frame                │
                          └────────────┬───────────┘
-                              all 3 pass ↓    timeout/passive fail streak ↓
-                         ┌───────────┐           ┌──────────┐
-                         │  passed   │           │  failed  │
-                         └───────────┘           └──────────┘
-                         session token                8s cooldown
-                         generated                  before retry
+                       all 3 pass ↓       timeout/passive fail streak ↓
+                    ┌───────────┐              ┌──────────┐
+                    │  passed   │              │  failed  │
+                    └───────────┘              └──────────┘
+                    session token              8s cooldown
+                    generated               before retry
 
   Challenge pool (3 randomly selected via Random.secure() per session):
   ├─ BLINK      — BOTH eyes < 0.43 probability for 4+ consecutive frames
@@ -387,240 +419,193 @@ LivenessService.processFrame()
   └─ Eye symmetry:    |leftOpen - rightOpen| > 0.30 → unnatural asymmetry suspected
 ```
 
-**Why 3 challenges (up from 2)?** Each additional challenge multiplies the difficulty of preparing a spoofing video. A would-be attacker must now record and synchronise three specific actions in the exact sequence demanded by the system — which is randomised fresh every session.
+**Why 3 challenges (up from 2)?** Each additional challenge exponentially increases difficulty for a pre-recorded spoof.
 
-**Why `Random.secure()` for challenge selection?** Uses the OS cryptographically secure random number generator rather than a seeded RNG. Challenge order cannot be predicted from any prior session observation.
+**Why `Random.secure()`?** OS cryptographically secure PRNG. Challenge order cannot be predicted from any prior session.
 
-**Why a session token?** A 16-character random token is generated when challenges start and captured at pass-time by `camera_screen`. Before recognition runs, the token is re-checked against the live service — if liveness was reset between passing and recognition (e.g., via a race condition), the stale result is discarded.
+**Why a session token?** 16-character random token generated at challenge start and captured at pass-time. Verified before recognition runs. Protects against race conditions between liveness pass and recognition.
 
-**Why a 20-second challenge timeout?** Prevents an attacker from holding a device in front of a pre-recorded video indefinitely while waiting for the right moment. If the session is not completed within 20 seconds, the check hard-fails.
+**Why 20-second timeout?** Prevents indefinite replay attacks.
 
-**Why the hard-fail state with cooldown?** When the passive fail streak reaches 8, the state machine enters `LivenessState.failed` and the camera screen enforces an 8-second cooldown before another attempt. This makes automated video-replay scanning meaningfully slower.
-
-**Blink threshold set to 0.43:** Values above 0.50 are too lenient (partial squints register as blinks). Values at or below 0.40 are too strict (require pronounced, exaggerated blinks). 0.43 matches natural everyday blinking behaviour on the tested device range.
+**Why hard-fail with 8s cooldown?** Makes automated video-replay scanning slower by enforcing a mandatory wait after passive fail streak.
 
 ---
 
-## 9. State Management Architecture
+## 9. Neural Anti-Spoofing (NCNN MiniFASNet)
+
+A second, independent anti-spoofing mechanism runs at the native C++ level via the NCNN inference framework.
+
+```
+CameraImage (YUV420)
+        ↓
+NcnnAntiSpoofService.detectSpoof()
+  YUV420 → NV21 byte array (Dart)
+  Face bounding box coordinates extracted from ML Kit result
+  Coordinates clamped and validated
+        ↓
+MethodChannel('com.example.alams/antispoof')
+  → Android JNI: anti_spoof_jni.cpp
+  → NCNN engine: MiniFASNet (model_1 + model_2)
+  → Inference on face crop
+  → Returns confidence float [0.0 – 1.0]
+        ↓
+  confidence > 0.80 → isReal = true
+  confidence ≤ 0.80 → isReal = false (SPOOF)
+```
+
+**MiniFASNet** is a lightweight binary classification model trained to distinguish real skin texture from spoofed artifacts (printed photos, screen surfaces). Two NCNN model files (`model_1.bin/.param` and `model_2.bin/.param`) are bundled as Android assets.
+
+**Why 0.80 threshold?** Calibrated empirically to reduce false positives for varied skin tones while maintaining strong rejection of obvious spoofs. Lower thresholds produced false rejections for darker skin tones; higher thresholds allowed some screen-held images to pass.
+
+**Why native NCNN instead of TFLite?** MiniFASNet's reference implementation uses NCNN. Running it via JNI in its native framework avoids conversion artifacts and maintains accuracy parity with the reference. The NCNN C++ runtime is also lower-latency than the TFLite runtime for this model size.
+
+**Interaction with LivenessService:** Both run concurrently on every camera frame. NCNN anti-spoof runs during the liveness challenge phase. A spoof detection does not need to happen simultaneously with a liveness failure — either is sufficient to reject the session.
+
+---
+
+## 10. Cloud Sync Architecture (Supabase)
+
+### 10.1 Architecture
+
+```
+┌──────────────────────────────────────────────────────┐
+│                  Android Device (SQLite)              │
+│                                                      │
+│  DatabaseService ──write──→ sync_queue table         │
+│                                  │                   │
+│              SyncService.enqueue()                   │
+│                     │                                │
+│         (connectivity restored)                      │
+│                     │                                │
+│              SyncService.syncNow()                   │
+│                     ↓                                │
+└──────────────────────────────────────────────────────┘
+                       │  HTTPS
+                       ↓
+┌──────────────────────────────────────────────────────┐
+│                    Supabase                          │
+│  Tables: employees, attendance, departments,         │
+│          system_settings                             │
+│                                                      │
+│  Realtime channels (PostgresChangeEvent.all)         │
+│  → employees, attendance, departments, system_settings│
+└──────────────────────────────────────────────────────┘
+                       │  WebSocket (realtime)
+                       ↓
+┌──────────────────────────────────────────────────────┐
+│             Other Connected Devices                  │
+│  pullFromSupabase() → update local SQLite            │
+│  SyncRefreshNotifier.refresh() → UI providers refetch│
+└──────────────────────────────────────────────────────┘
+```
+
+### 10.2 Outbound Sync (Device → Supabase)
+
+Every write in `DatabaseService` calls `SyncService.instance.enqueue()` with:
+- `tableName` — which table was affected
+- `operation` — `INSERT`, `UPDATE`, or `DELETE`
+- `recordId` — the local SQLite row ID
+- `payload` — the full record as JSON
+
+These are stored in `sync_queue`. `SyncService.syncNow()` processes the queue in order when connectivity is available. Processed entries are deleted from the queue.
+
+### 10.3 Inbound Sync (Supabase → Device)
+
+`SyncService._subscribeRealtime()` opens one Supabase Realtime channel per table (`employees`, `attendance`, `departments`, `system_settings`). On any Postgres change event, `pullFromSupabase()` is called to fetch the latest data and update the local SQLite database.
+
+After a pull, `SyncRefreshNotifier.refresh()` increments `syncRefreshCountProvider`, which all `FutureProvider`s watch. This triggers a full UI refresh across all screens.
+
+### 10.4 Periodic Sync
+
+A `Timer.periodic` fires every 30 seconds and calls `pullFromSupabase()` as a fallback for cases where realtime events may have been missed (e.g., after a connectivity gap).
+
+### 10.5 Connectivity Monitoring
+
+`connectivity_plus` monitors network state. On `ConnectivityResult != none`: `syncNow()` (push queue) and `pullFromSupabase()` (pull latest) are both triggered immediately.
+
+---
+
+## 11. State Management Architecture
 
 ALAMS uses **Riverpod 3** as its state management solution.
 
-Providers are defined in `providers/` files within each feature:
-
 | Provider | Type | Purpose |
 |----------|------|---------|
-| `employeesProvider` | `FutureProvider` | List of all active employees |
+| `employeesProvider` | `FutureProvider` | List of all active (non-deleted, non-admin) employees |
 | `attendanceLogsProvider` | `FutureProvider` | All attendance logs |
 | `attendanceLogsWithNamesProvider` | `FutureProvider` | Logs joined with employee names |
-| `attendanceLogsWithNamesTodayProvider` | `FutureProvider` | Today's logs joined with names |
-| `currentlyWorkingProvider` | `FutureProvider` | Employees currently checked in |
-| `absentTodayProvider` | `FutureProvider` | Employees absent today |
-| `faceRecognitionProvider` | `AsyncNotifierProvider` | FR model load status |
+| `attendanceLogsTodayProvider` | `FutureProvider` | Today's logs with employee names |
+| `currentlyWorkingProvider` | `FutureProvider` | Employees currently checked in (latest log today = IN) |
+| `absentTodayProvider` | `FutureProvider` | Employees absent today (no log after grace period) |
+| `syncRefreshCountProvider` | `NotifierProvider<int>` | Incremented by SyncService to trigger re-fetch across all providers |
+| `faceRecognitionProvider` | `AsyncNotifierProvider` | FR model load state |
+| `includeDeletedLogsProvider` | `NotifierProvider<bool>` | Toggle for showing deleted employee logs in reports |
+| `attendanceNotifierProvider` | `NotifierProvider` | Handles recording attendance and invalidating related providers |
 
-After a write operation (e.g., recording attendance), the relevant providers are invalidated via `ref.invalidate(provider)` to trigger a fresh database read and re-render downstream widgets.
+All `FutureProvider`s watch `syncRefreshCountProvider` via `ref.watch(syncRefreshCountProvider)`. This means any call to `SyncRefreshNotifier.refresh()` (from SyncService after a cloud pull) causes all providers to re-run their database queries.
 
-**Why Riverpod over other solutions?** Riverpod's compile-safe providers, lack of `BuildContext` dependency for reading state, and clean `AsyncValue` handling for database futures made it well-suited for this data-heavy app. Its `ConsumerWidget` / `ConsumerStatefulWidget` pattern integrates cleanly with Flutter's widget tree.
-
----
-
-## 10. Tech Stack & Dependencies
-
-This section covers every technology, framework, package, and ML asset used in ALAMS — what each one is, why it was chosen, and how it contributes to the system.
+After local writes, `ref.invalidate(provider)` is used directly for immediate UI refresh without waiting for the sync cycle.
 
 ---
 
-### 10.1 Core Platform
-
-#### Flutter (SDK ^3.10.3) + Dart
-Flutter is Google's open-source UI toolkit for building natively compiled applications from a single codebase. ALAMS targets Android as its primary platform, but the codebase is structured to remain cross-platform compatible.
-
-**Why Flutter?**
-- A single Dart codebase compiles to native Android ARM code, giving near-native performance — important for real-time camera processing and ML inference.
-- Flutter's widget system makes it straightforward to build the custom kiosk UI (full-screen camera overlays, animated state transitions) without platform-specific UI code.
-- The package ecosystem has mature, well-maintained plugins for camera access, ML Kit integration, and TFLite — all critical dependencies for this project.
-
-**Why Dart?**
-Dart is Flutter's companion language. Its `async`/`await` model is well-suited to the app's heavy use of asynchronous operations: camera streams, database queries, and TFLite inference all run asynchronously without blocking the UI thread.
-
----
-
-### 10.2 Machine Learning & Computer Vision
-
-#### FaceNet (TFLite, `facenet.tflite`)
-FaceNet is a deep convolutional neural network architecture developed by Google Research (Schroff et al., 2015) that maps face images directly to a compact Euclidean embedding space. Faces of the same person cluster close together in this space; faces of different people are far apart.
-
-The model bundled in ALAMS is a FaceNet variant converted to TensorFlow Lite flat buffer format for on-device inference.
-
-| Property | Value |
-|----------|-------|
-| Input tensor | `[1, 160, 160, 3]` float32 |
-| Input normalization | `(pixel / 127.5) − 1.0` → range `[−1.0, 1.0]` |
-| Output tensor | `[1, 128]` float32 embedding vector |
-| Model file size | ~23 MB |
-| Inference threads | 4 (configured via `InterpreterOptions`) |
-
-**Why FaceNet over simpler approaches (e.g., Eigenfaces, LBPH)?**
-FaceNet's deep embedding approach is significantly more robust to lighting variation, minor pose changes, and aging compared to classical methods. Because embeddings are fixed-length float vectors, matching is a simple distance computation — fast enough to run per-frame on mid-range Android hardware.
-
-#### `tflite_flutter` (^0.12.1)
-The official Flutter plugin for TensorFlow Lite. Provides a Dart API to load `.tflite` model files from assets, run inference with typed input/output tensors, and manage interpreter lifecycle.
-
-ALAMS uses it to load `facenet.tflite` once at startup via `FaceRecognitionService.loadModel()` and reuse the interpreter across the app's lifetime. The interpreter is configured to use 4 threads to parallelize convolution operations on multi-core mobile CPUs.
-
-#### Google ML Kit Face Detection (`google_mlkit_face_detection` ^0.13.2)
-Google's on-device ML SDK for Android and iOS. The face detection component runs a fast face detector that returns, for each detected face:
-
-- **Bounding box** — position and size of the face in the frame
-- **3D Euler angles** — `headEulerAngleX` (tilt), `headEulerAngleY` (turn), `headEulerAngleZ` (roll)
-- **Classification probabilities** — `leftEyeOpenProbability`, `rightEyeOpenProbability`, `smilingProbability`
-- **Facial contours** — landmark point arrays for lips, eyes, nose, face oval
-
-ALAMS uses ML Kit for two distinct purposes: liveness challenge evaluation in `LivenessService` (all of the above) and face presence detection during guided registration in `RegistrationScreen` (bounding box + eye open probability).
-
-**Why ML Kit instead of TFLite for detection?**
-ML Kit abstracts the face detection pipeline completely — developers don't need to manage a separate detection model, handle input format conversion, or parse raw tensor outputs into landmark coordinates. For a pose/expression challenge system, ML Kit's high-level API (euler angles as floats, eye-open as 0.0–1.0 probability) is far more productive than building this from raw tensors.
-
-#### `image` (^4.8.0)
-A pure-Dart image manipulation library. ALAMS uses it specifically for:
-- YUV420 → RGB conversion: the `camera` plugin delivers frames in YUV420 format (the native Android camera format). The `image` package provides pixel-level operations to reconstruct an RGB image from the Y, U, and V planes.
-- `img.copyResize()` — resizes the converted RGB image to 160×160 pixels to match FaceNet's input tensor shape.
-
-Being pure Dart means it runs without any native code or FFI — important for isolate compatibility if the preprocessing is ever moved off the main thread via `compute()`.
-
----
-
-### 10.3 Camera
-
-#### `camera` (^0.12.0+1)
-The official Flutter camera plugin. Provides a `CameraController` that abstracts Android's Camera2 API. ALAMS uses it to:
-- Enumerate available cameras and select the front-facing camera (`CameraLensDirection.front`).
-- Initialize a live preview at `ResolutionPreset.medium` in `ImageFormatGroup.yuv420`.
-- Start an `imageStream` that delivers raw `CameraImage` frames to a Dart callback for real-time processing.
-- Dispose and re-acquire the camera when navigating between screens (required to release the hardware lock).
-
-**Why `ResolutionPreset.medium`?** Higher resolutions deliver larger frames that take longer to process through YUV→RGB conversion and ML Kit. Medium resolution (~720p on most devices) provides sufficient image quality for FaceNet while keeping per-frame processing time manageable.
-
----
-
-### 10.4 Database & Persistence
-
-#### SQLite via `sqflite` (^2.4.2)
-SQLite is an embedded relational database engine. `sqflite` is the Flutter plugin that wraps the native SQLite library available on Android and iOS. ALAMS stores all data — employees, attendance records, departments, and settings — in a single `alams.db` SQLite file on the device.
-
-**Why SQLite / sqflite?**
-- Fully offline — no server, no sync, no network dependency.
-- Relational queries (JOINs for attendance logs with employee names, subqueries for "currently at work" logic) are more expressive and maintainable than document or key-value approaches.
-- `sqflite` supports versioned schema migrations via `onUpgrade`, enabling safe schema evolution across app updates.
-- Data survives app restarts, device reboots, and app updates.
-
-#### `path_provider` (^2.1.5)
-Provides platform-safe directory paths. ALAMS calls `getDatabasesPath()` (provided by sqflite, which internally uses path_provider) to resolve the correct location to store `alams.db` on both Android and iOS without hardcoding a filesystem path.
-
-#### `path` (^1.9.1)
-A utility library for constructing file system paths. Used specifically in `DatabaseService._initDB()` to join the database directory path with the filename: `join(dbPath, 'alams.db')`.
-
----
-
-### 10.5 State Management
-
-#### Riverpod (`flutter_riverpod` ^3.3.1 + `riverpod_annotation` ^4.0.2)
-Riverpod is a compile-safe, testable reactive state management library for Flutter. It is a spiritual successor to the `provider` package, removing its key limitations: no `BuildContext` required to read state, providers can be accessed anywhere, and there are no accidental overrides.
-
-ALAMS uses Riverpod's `FutureProvider` for all database-backed state (employee lists, attendance logs, dashboard metrics) and `AsyncNotifierProvider` for the face recognition model's load state.
-
-**Why Riverpod over alternatives?**
-
-| Alternative | Why Not Chosen |
-|-------------|---------------|
-| `setState` | Does not scale across screens; rebuilds too broadly |
-| `provider` | Context-dependent; can cause runtime errors at the call site |
-| `BLoC` | Higher boilerplate for a project of this scope |
-| `GetX` | Opinionated global state can make data flow harder to trace |
-
-Riverpod's `ref.invalidate(provider)` pattern is central to ALAMS — after every write (attendance recorded, employee registered), the relevant provider is invalidated, which triggers a fresh database read and automatically re-renders all widgets watching that provider.
-
----
-
-### 10.6 Utilities & Formatting
-
-#### `intl` (^0.20.2)
-The Dart internationalization and localization package. ALAMS uses `DateFormat` from this package to format timestamps and dates throughout the UI — for example, `DateFormat('EEEE, MMMM d').format(now)` on the kiosk home screen, and date-based grouping in the reports screen.
-
----
-
-### 10.7 Development & Build Tools
-
-#### Flutter Lints (`flutter_lints` ^6.0.0)
-The official Flutter lint rule set, activated via `analysis_options.yaml`. Enforces consistent Dart code style and catches common mistakes at static analysis time. Configured at the project level.
-
-#### Android Gradle Build System
-The Android platform project uses Kotlin DSL (`build.gradle.kts`) for its Gradle build scripts. The build targets:
-- `minSdk`: configured in `android/app/build.gradle.kts` (compatible with Android devices that support Camera2 API and ML Kit)
-- `targetSdk`: latest stable Android SDK
-- Gradle wrapper version: 8.14
-
----
-
-### 10.8 Summary Table
+## 12. Tech Stack & Dependencies
 
 | Layer | Technology | Version | Purpose |
-|-------|-----------|---------|---------|
+|-------|-----------|---------|---------| 
 | **UI Framework** | Flutter + Dart | SDK ^3.10.3 | Cross-platform native UI, app lifecycle |
 | **State Management** | Riverpod | ^3.3.1 | Reactive, compile-safe state across screens |
 | **On-Device Database** | SQLite (sqflite) | ^2.4.2 | Persistent local data store (schema v7) |
 | **Face Recognition Model** | FaceNet TFLite | — | L2-normalised 128-dim facial embedding generation |
 | **ML Inference Runtime** | tflite_flutter | ^0.12.1 | On-device TFLite model execution |
 | **Face Detection & Analysis** | Google ML Kit | ^0.13.2 | Face detection, landmarks, euler angles, eye/smile classification |
+| **Passive Anti-Spoofing** | MiniFASNet (NCNN/JNI) | — | Native neural network for real vs. spoof classification |
 | **Camera Access** | camera | ^0.12.0+1 | Front-camera streaming (YUV420) |
 | **Image Processing** | image (Dart) | ^4.8.0 | YUV→RGB conversion, resize to 160×160 |
-| **Password Hashing** | crypto_utils.dart (custom) | — | Pure-Dart PBKDF2-SHA256, 10k iterations, isolate-safe |
+| **Password Hashing** | custom crypto_utils.dart | — | Pure-Dart PBKDF2-SHA256, 10k iterations, isolate-safe |
+| **Cloud Sync** | supabase_flutter | — | Supabase client, realtime subscriptions, REST writes |
+| **Connectivity** | connectivity_plus | — | Network state monitoring for sync triggers |
 | **Date/Time Formatting** | intl | ^0.20.2 | Locale-aware date display in UI and reports |
 | **File Path Resolution** | path_provider | ^2.1.5 | Platform-safe DB file path |
 | **Path Utilities** | path | ^1.9.1 | File path joining |
-| **App Icon Generation** | flutter_launcher_icons | ^0.13.1 | Automated generation of Android/iOS app icons from branding assets |
-| **Platform** | Android (Kotlin) | — | Host platform, Camera2 API, ML Kit native |
+| **Platform** | Android (Kotlin + C++) | — | Host platform, Camera2 API, ML Kit native, NCNN JNI |
 
 ---
 
-## 11. Security Considerations
+## 13. Security Considerations
 
-### 11.1 Threat Model & Mitigations
+### 13.1 Threat Model & Mitigations
 
 | Threat | Mitigation |
-|--------|-----------|
-| Buddy punching (human proxy) | Face recognition requires a biometric match |
-| Photo spoof attack | 3 randomised liveness challenges; passive staticness check |
-| Video replay attack | CSPRNG challenge selection; session token; 20s timeout |
-| Multi-face injection | Single-face guard rejects any frame with >1 detected face |
-| Flat-surface (screen) spoof | Aspect ratio check during head turns; eye symmetry check |
+|--------|-----------| 
+| Buddy punching (human proxy) | Face recognition requires biometric match |
+| Photo spoof attack | 3 randomised liveness challenges + NCNN passive neural spoof detection |
+| Video replay attack | CSPRNG challenge selection (order unknown); session token; 20s timeout; NCNN skin/depth analysis |
+| Pre-recorded all-challenges video | Only 3 of 5 challenges selected per session in random order — must predict exact combination |
+| Multi-face injection | Single-face guard resets session on >1 detected face |
+| Flat-surface / screen spoof | Aspect ratio check during head turns; NCNN screen artifact detection |
 | Frozen frame / static image | Passive face area delta check (< 2px² → fail streak) |
 | Brute-force liveness | Hard-fail state + 8s cooldown after 8 passive failures |
 | Admin password compromise | PBKDF2-SHA256, 10k iterations, 16-byte random salt per account |
 | Brute-force admin login | Lockout after 5 failures in 15 minutes; remaining attempts shown |
-| Timing-based password inference | Constant-time hash comparison; password never compared in SQL |
+| Timing-based password inference | Constant-time hash comparison |
 | User enumeration via login | Failed attempts recorded even for unknown usernames |
 | Duplicate identity enrollment | `checkDuplicateEmbedding()` at registration with 0.35 threshold |
 | Ambiguous face match | Two-threshold matching: primary 0.40 + margin guard 0.08 |
 | Session token replay (race condition) | Liveness session token verified before recognition is consumed |
-| SQL injection | All queries use parameterised placeholders; no string interpolation |
-| FK integrity violation | `PRAGMA foreign_keys = ON` set on every DB connection open |
+| SQL injection | All queries use parameterised placeholders |
+| FK integrity violation | `PRAGMA foreign_keys = ON` on every DB connection |
 | Data exfiltration via device theft | Embeddings only (no raw images stored); PBKDF2-hashed credentials |
 | Employee record tampering | Soft deletes preserve full audit trail |
+| Stale count after employee delete | `ref.invalidate()` called on all affected providers immediately after delete |
+| Filter bypass on navigation | `settings:` explicitly passed to `PageRouteBuilder` so arguments survive custom transitions |
 
-### 11.2 PBKDF2 Iteration Count Rationale
+### 13.2 PBKDF2 Iteration Count Rationale
 
-The implementation uses **10,000 iterations** rather than the more commonly cited 100,000. This is a deliberate, reasoned trade-off for a mobile kiosk context:
+10,000 iterations is a deliberate trade-off for mobile kiosk hardware. 100,000 iterations takes 800ms–1,200ms on a mid-range Android CPU; 10,000 iterations takes 80–120ms, imperceptible when run in a `compute()` isolate. A 16-byte random salt ensures rainbow tables are useless regardless of iteration count. An attacker needs physical device access to even read the SQLite database, at which point 10,000 iterations still makes dictionary attacks computationally expensive.
 
-100,000 iterations of pure-Dart PBKDF2 takes approximately 800ms–1,200ms on a mid-range Android CPU. Even when offloaded to a background isolate this causes a perceptible delay on login. More critically, when run on the main thread (which was the original bug) it produces a visible black screen on launch and a hard hang on every login attempt.
+### 13.3 Off-Thread Crypto
 
-10,000 iterations takes approximately 80–120ms on the same hardware — imperceptible when run in a `compute()` isolate. The security trade-off is acceptable for this threat model: an attacker must have physical access to the device to read the SQLite database at all. The 16-byte random salt ensures precomputed rainbow tables are useless regardless of iteration count. If the device is stolen and the database extracted, 10,000 iterations still requires roughly 10,000× more compute per guess than plaintext, making offline dictionary attacks costly without sacrificing runtime usability.
-
-### 11.3 Off-Thread Crypto — No UI Blocking
-
-All cryptographic operations use Flutter's `compute()` function to run in a separate Dart isolate:
-
-- `hashPassword()` — called during admin registration and password change
-- `verifyPassword()` — called on every login attempt
-- `_migratePasswordsToHashed()` — called once via `Future.microtask()` after DB open, completely off the critical path
-
-The `crypto_utils.dart` exposes dedicated static entry points (`hashPasswordIsolate`, `verifyPasswordIsolate`) shaped as single-argument functions to match `compute()`'s API requirements.
+All cryptographic operations use `compute()`:
+- `hashPassword()` — admin registration and password change
+- `verifyPassword()` — every login attempt
+- `_migratePasswordsToHashed()` — once via `Future.microtask()` after DB open, off critical path
