@@ -229,7 +229,7 @@ class _AttendanceHistoryScreenState extends State<AttendanceHistoryScreen> {
             ),
             const SizedBox(height: 32),
             
-            _buildDetailRow(Icons.business_rounded, 'Department', widget.employee.department),
+            _buildDetailRow(Icons.business_rounded, 'Company', widget.employee.department),
             _buildDetailRow(Icons.work_outline_rounded, 'Position', widget.employee.position),
             _buildDetailRow(Icons.email_outlined, 'Email', widget.employee.email.isEmpty ? 'N/A' : widget.employee.email),
             _buildDetailRow(Icons.cake_outlined, 'Age', '${widget.employee.age} years old'),

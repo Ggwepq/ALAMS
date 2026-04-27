@@ -305,7 +305,7 @@ class DatabaseService {
     await db.execute('UPDATE employees SET is_admin = 0 WHERE is_admin IS NULL');
     final result = await db.query(
       'employees',
-      where: 'is_admin != 1 AND is_deleted = 0',
+      where: '(is_admin != 1 OR is_admin IS NULL) AND (is_deleted = 0 OR is_deleted IS NULL)',
     );
     return result.map((json) => Employee.fromMap(json)).toList();
   }
@@ -589,7 +589,9 @@ class DatabaseService {
     final db    = await instance.database;
     final today = DateTime.now().toIso8601String().substring(0, 10);
     final result = await db.rawQuery('''
-      SELECT * FROM employees WHERE is_admin = 0 AND is_deleted = 0 AND id IN (
+      SELECT * FROM employees 
+      WHERE (is_admin != 1 OR is_admin IS NULL) AND (is_deleted = 0 OR is_deleted IS NULL) 
+      AND id IN (
         SELECT a.employee_id FROM attendance a
         INNER JOIN (
           SELECT employee_id, MAX(timestamp) AS max_ts
@@ -634,7 +636,7 @@ class DatabaseService {
 
     final result = await db.rawQuery('''
       SELECT * FROM employees
-      WHERE is_admin = 0 AND is_deleted = 0
+      WHERE (is_admin != 1 OR is_admin IS NULL) AND (is_deleted = 0 OR is_deleted IS NULL)
         AND id NOT IN (
           SELECT DISTINCT employee_id FROM attendance WHERE timestamp LIKE ?
         )

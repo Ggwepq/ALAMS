@@ -69,6 +69,9 @@ class LivenessService {
       ? _activeChallenges[_currentChallengeIndex]
       : null;
 
+  int get currentChallengeIndex => _currentChallengeIndex;
+  int get totalChallenges => _activeChallenges.length;
+
   /// Process a single [InputImage] frame.
   Future<LivenessState> processFrame(InputImage inputImage) async {
     final faces = await _detector.processImage(inputImage);
@@ -148,7 +151,7 @@ class LivenessService {
   void startChallenges() {
     final random = math.Random();
     _activeChallenges = List.from(_challengePool)..shuffle(random);
-    _activeChallenges = _activeChallenges.take(2).toList(); 
+    _activeChallenges = _activeChallenges.take(3).toList(); 
     _currentChallengeIndex = 0;
     _state = LivenessState.performingChallenge;
     _blinkStateReset();

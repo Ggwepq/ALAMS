@@ -54,7 +54,7 @@ class _DepartmentManagementScreenState extends State<DepartmentManagementScreen>
     return Scaffold(
       backgroundColor: const Color(0xFF0D1117),
       appBar: AppBar(
-        title: const Text('Manage Departments', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        title: const Text('Manage Companies', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
         backgroundColor: Colors.transparent,
         elevation: 0,
         iconTheme: const IconThemeData(color: Colors.white),
@@ -71,7 +71,7 @@ class _DepartmentManagementScreenState extends State<DepartmentManagementScreen>
                     controller: _nameController,
                     style: const TextStyle(color: Colors.white),
                     decoration: InputDecoration(
-                      hintText: 'New Department Name',
+                      hintText: 'New Company Name',
                       hintStyle: const TextStyle(color: Colors.white24),
                       filled: true,
                       fillColor: Colors.white10,
@@ -100,7 +100,7 @@ class _DepartmentManagementScreenState extends State<DepartmentManagementScreen>
               child: _isLoading
                   ? const Center(child: CircularProgressIndicator(color: Colors.teal))
                   : _departments.isEmpty
-                      ? const Center(child: Text('No departments found', style: TextStyle(color: Colors.white38)))
+                      ? const Center(child: Text('No companies found', style: TextStyle(color: Colors.white38)))
                       : ListView.separated(
                           itemCount: _departments.length,
                           separatorBuilder: (ctx, idx) => const SizedBox(height: 12),
