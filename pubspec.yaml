@@ -44,6 +44,11 @@ dependencies:
   intl: ^0.20.2
   image: ^4.8.0
   path: ^1.9.1
+  supabase_flutter: ^2.8.4
+  connectivity_plus: ^6.1.4
+  flutter_dotenv: ^5.1.0
+  supabase: ^2.10.6
+  password_hash_plus: 4.0.0
 
 dev_dependencies:
   flutter_test:
@@ -55,6 +60,14 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.13.1
+
+flutter_launcher_icons:
+  android: "launcher_icon"
+  ios: true
+  image_path: "assets/images/alams_favicon.png"
+  min_sdk_android: 21 # android min sdk value
+  remove_alpha_ios: true
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
@@ -69,6 +82,7 @@ flutter:
 
   assets:
     - assets/models/
+    - .env
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

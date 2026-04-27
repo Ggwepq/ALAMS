@@ -1,5 +1,7 @@
+import 'dart:io';
 import 'dart:math' as math;
 
+import 'dart:ui';
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:image/image.dart' as img;
@@ -47,49 +49,108 @@ class FaceRecognitionService {
 
   bool get isLoaded => _isLoaded;
 
-  /// Converts a [CameraImage] (YUV420) to a 160×160 RGB image for FaceNet.
+  /// Converts a [CameraImage] (YUV420) to a 160x160 [img.Image] isolated to the face area.
   /// Static so it can run inside a compute isolate.
-  static img.Image? preprocessCameraImage(CameraImage cameraImage) {
+  static img.Image? preprocessCameraImage(Map<String, dynamic> args) {
     try {
-      final planes = cameraImage.planes;
-      final yPlane = planes[0];
-      final uPlane = planes[1];
-      final vPlane = planes[2];
+      final CameraImage cameraImage = args['image'];
+      final Rect? cropRect = args['cropRect'];
 
-      final width  = cameraImage.width;
+      final width = cameraImage.width;
       final height = cameraImage.height;
+      
+      final yPlane = cameraImage.planes[0];
+      final uPlane = cameraImage.planes[1];
+      final vPlane = cameraImage.planes[2];
 
-      final yBytes = yPlane.bytes;
-      final uBytes = uPlane.bytes;
-      final vBytes = vPlane.bytes;
+      final int yRowStride = yPlane.bytesPerRow;
+      final int uvRowStride = uPlane.bytesPerRow;
+      final int uvPixelStride = uPlane.bytesPerPixel ?? 1;
 
-      final yRowStride  = yPlane.bytesPerRow;
-      final uvRowStride = uPlane.bytesPerRow;
-      final uvPixelStride = uPlane.bytesPerPixel ?? 1;
+      // Define dimensions to scan
+      int startX = 0;
+      int startY = 0;
+      int scanWidth = width;
+      int scanHeight = height;
 
-      final rawImage = img.Image(width: width, height: height);
+      if (cropRect != null) {
+        // 🛡️ Add 10% padding to ensure peripheral features are captured
+        final double paddingX = cropRect.width * 0.10;
+        final double paddingY = cropRect.height * 0.10;
+        
+        startX = (cropRect.left - paddingX).toInt().clamp(0, width - 1);
+        startY = (cropRect.top - paddingY).toInt().clamp(0, height - 1);
+        scanWidth = (cropRect.width + (paddingX * 2)).toInt().clamp(1, width - startX);
+        scanHeight = (cropRect.height + (paddingY * 2)).toInt().clamp(1, height - startY);
+      }
 
-      for (int h = 0; h < height; h++) {
-        for (int w = 0; w < width; w++) {
-          final yIndex  = h * yRowStride + w;
-          final uvIndex = (h ~/ 2) * uvRowStride + (w ~/ 2) * uvPixelStride;
+      // Target size for FaceNet
+      const int targetSize = 160;
+      final double scaleX = scanWidth / targetSize;
+      final double scaleY = scanHeight / targetSize;
 
-          final yVal = yBytes[yIndex] & 0xFF;
-          final uVal = uBytes[uvIndex] & 0xFF;
-          final vVal = vBytes[uvIndex] & 0xFF;
+
+      final processedImage = img.Image(width: targetSize, height: targetSize);
+
+      for (int h = 0; h < targetSize; h++) {
+        final int srcY = startY + (h * scaleY).toInt();
+        for (int w = 0; w < targetSize; w++) {
+          final int srcX = startX + (w * scaleX).toInt();
+
+          final int yIndex = srcY * yRowStride + srcX;
+          final int uvIndex = (srcY ~/ 2) * uvRowStride + (srcX ~/ 2) * uvPixelStride;
+
+          // Extra safety check for bounds
+          if (yIndex >= yPlane.bytes.length || uvIndex >= uPlane.bytes.length) continue;
+
+          final int yVal = yPlane.bytes[yIndex] & 0xFF;
+          final int uVal = uPlane.bytes[uvIndex] & 0xFF;
+          final int vVal = vPlane.bytes[uvIndex] & 0xFF;
 
           final r = (yVal + 1.402 * (vVal - 128)).clamp(0, 255).toInt();
           final g = (yVal - 0.344136 * (uVal - 128) - 0.714136 * (vVal - 128)).clamp(0, 255).toInt();
           final b = (yVal + 1.772 * (uVal - 128)).clamp(0, 255).toInt();
 
-          rawImage.setPixelRgb(w, h, r, g, b);
+          processedImage.setPixelRgb(w, h, r, g, b);
         }
       }
 
-      return img.copyResize(rawImage, width: kInputSize, height: kInputSize);
+      // DEBUG: Save the cropped face to disk if requested
+      final String? debugPath = args['debugPath'];
+      // 🛡️ Brightness Equalization: Normalize light levels to help the AI "see" in shadows
+      _calibrateBrightness(processedImage);
+
+      if (debugPath != null) {
+        File(debugPath).writeAsBytesSync(img.encodeJpg(processedImage));
+        debugPrint('[FaceRecognition] Debug image saved: $debugPath');
+      }
+
+      return processedImage;
     } catch (e) {
       debugPrint('[FaceRecognition] Preprocessing error: $e');
       return null;
+    }
+  }
+
+  /// Stretches the image histogram to improve contrast in low light.
+  static void _calibrateBrightness(img.Image image) {
+    num minV = 255;
+    num maxV = 0;
+
+    for (final pixel in image) {
+      final lum = (0.299 * pixel.r) + (0.587 * pixel.g) + (0.114 * pixel.b);
+      if (lum < minV) minV = lum;
+      if (lum > maxV) maxV = lum;
+    }
+
+    // Only stretch if there's enough range to work with and it's actually dim
+    if (maxV - minV > 10 && maxV < 200) {
+      final factor = 255.0 / (maxV - minV);
+      for (final pixel in image) {
+        pixel.r = ((pixel.r - minV) * factor).clamp(0, 255);
+        pixel.g = ((pixel.g - minV) * factor).clamp(0, 255);
+        pixel.b = ((pixel.b - minV) * factor).clamp(0, 255);
+      }
     }
   }
 
@@ -98,6 +159,9 @@ class FaceRecognitionService {
     if (!_isLoaded || _interpreter == null) return null;
 
     try {
+      // Ensure image is correct size for FaceNet
+      final resizedImage = img.copyResize(faceImage, width: kInputSize, height: kInputSize);
+      
       final outputShape = _interpreter!.getOutputTensor(0).shape;
       final embeddingSize = outputShape.last;
 
@@ -108,7 +172,7 @@ class FaceRecognitionService {
           (h) => List.generate(
             kInputSize,
             (w) {
-              final pixel = faceImage.getPixel(w, h);
+              final pixel = resizedImage.getPixel(w, h);
               return [
                 (pixel.r / 127.5) - 1.0,
                 (pixel.g / 127.5) - 1.0,
@@ -161,8 +225,8 @@ class FaceRecognitionService {
   static RecognitionResult findBestMatch(
     List<double> liveEmbedding,
     List<MapEntry<String, List<double>>> knownFaces, {
-    double threshold = 0.40,  // tightened from 0.45
-    double minMargin = 0.08,  // second-best must be at least this much worse
+    double threshold = 0.55,  // Balanced for mobile deployment (0.50-0.60 is standard)
+    double minMargin = 0.05,  // Reduced to handle siblings or similar features
   }) {
     if (knownFaces.isEmpty) {
       return const RecognitionResult(label: 'Unknown', distance: 1.0, isRecognized: false);
@@ -184,9 +248,13 @@ class FaceRecognitionService {
     }
 
     final margin      = secondDist - bestDist;
-    final isRecognized = bestDist < threshold && margin >= minMargin;
+    
+    // 🛡️ ADAPTIVE MARGIN: If the best match is exceptionally strong (< 0.35), 
+    // we ignore the margin safety check to ensure recall.
+    final bool isStrongMatch = bestDist < 0.35;
+    final isRecognized = bestDist < threshold && (isStrongMatch || margin >= minMargin);
 
-    debugPrint('[FaceRecognition] best=$bestDist margin=$margin → recognized=$isRecognized');
+    debugPrint('[FaceRecognition] best=$bestDist margin=$margin strong=$isStrongMatch → recognized=$isRecognized');
 
     return RecognitionResult(
       label:        bestLabel,
@@ -202,7 +270,7 @@ class FaceRecognitionService {
   static String? checkDuplicateEmbedding(
     List<double> newEmbedding,
     List<MapEntry<String, List<double>>> existingFaces, {
-    double duplicateThreshold = 0.35, // stricter than recognition threshold
+    double duplicateThreshold = 0.30, // stricter check to prevent false positives
   }) {
     for (final entry in existingFaces) {
       final dist = cosineDistance(newEmbedding, entry.value);

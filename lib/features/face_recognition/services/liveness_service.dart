@@ -10,6 +10,7 @@ enum LivenessState {
   performingChallenge, // Current active randomized challenge
   passed, // Liveness confirmed
   failed, // Multiple failed attempts detected
+  spoofDetected, // Explicit AI detection of photo/screen
 }
 
 /// Types of liveness challenges
@@ -45,18 +46,23 @@ class LivenessService {
   int _actionFrames = 0;
   int _stabilityFrames = 0;
   Rect? _lastFaceRect;
+  
+  // Blink State Machine: Open -> Closed -> Open
+  bool _eyesClosedDetected = false;
 
   static const int _minStabilityFrames = 5;
   static const double _stabilityDelta = 25.0;
 
   // Thresholds
-  static const double _eyeClosedThreshold = 0.43;
-  static const int _minFramesForAction = 3;
+  static const double _eyeClosedThreshold = 0.35; // Stricter for "true" closed
+  static const double _eyeOpenThreshold = 0.65;   // Higher for "true" open
+  static const int _minFramesForAction = 2;       // For mouth/smile
   static const double _mouthOpenThreshold = 0.08;
   static const double _smileThreshold = 0.70;
   static const double _turnAngleThreshold = 25.0; // Degrees
 
   LivenessState get state => _state;
+  Rect? get lastFaceRect => _lastFaceRect;
   LivenessChallenge? get currentChallenge =>
       (_state == LivenessState.performingChallenge &&
           _activeChallenges.isNotEmpty)
@@ -73,6 +79,7 @@ class LivenessService {
       return _state;
     }
 
+    // Get Largest Face
     final face = faces.reduce((a, b) => _faceArea(a) > _faceArea(b) ? a : b);
 
     // Step 0: Stability & Selection
@@ -95,21 +102,15 @@ class LivenessService {
         return _state;
       }
 
-      // Stability met -> Select random challenges
-      _startRandomChallenges();
+      // Stability met - Stay in lookStraight until externally triggered (after Anti-Spoofing check)
+      _state = LivenessState.lookStraight;
+      return _state;
     }
 
     // Step 1: Execute Challenges
     if (_state == LivenessState.performingChallenge) {
       final challenge = _activeChallenges[_currentChallengeIndex];
       bool success = false;
-
-      // Passive Check: Geometric Depth & Consistency
-      if (!_checkPassiveLiveness(face)) {
-        debugPrint('[Liveness] Passive check failed - suspected spoof.');
-        // We don't fail immediately to avoid false positives,
-        // but we could track this.
-      }
 
       switch (challenge) {
         case LivenessChallenge.blink:
@@ -119,7 +120,6 @@ class LivenessService {
           success = _checkMouthOpen(face);
           break;
         case LivenessChallenge.turnLeft:
-          // In front camera, positive Euler Y is usually turning left
           success = (face.headEulerAngleY ?? 0.0) > _turnAngleThreshold;
           break;
         case LivenessChallenge.turnRight:
@@ -131,7 +131,8 @@ class LivenessService {
       }
 
       if (success) {
-        _actionFrames = 0; // Reset for next challenge
+        _actionFrames = 0; 
+        _blinkStateReset();
         _currentChallengeIndex++;
         debugPrint('[Liveness] Challenge completed: $challenge');
 
@@ -144,27 +145,42 @@ class LivenessService {
     return _state;
   }
 
-  void _startRandomChallenges() {
+  void startChallenges() {
     final random = math.Random();
     _activeChallenges = List.from(_challengePool)..shuffle(random);
-    _activeChallenges = _activeChallenges.take(2).toList(); // User requested 2
+    _activeChallenges = _activeChallenges.take(2).toList(); 
     _currentChallengeIndex = 0;
     _state = LivenessState.performingChallenge;
+    _blinkStateReset();
     debugPrint('[Liveness] Strategy: ${_activeChallenges.join(' -> ')}');
   }
 
+  void _blinkStateReset() {
+    _eyesClosedDetected = false;
+  }
+
+  void setSpoofDetected() {
+    _state = LivenessState.spoofDetected;
+  }
+
+  /// Improved Blink State Machine: Open -> Closed -> Open
   bool _checkBlink(Face face) {
-    final avgOpen =
-        ((face.leftEyeOpenProbability ?? 1.0) +
-            (face.rightEyeOpenProbability ?? 1.0)) /
-        2.0;
-    if (avgOpen < _eyeClosedThreshold) {
-      _actionFrames++;
-      return _actionFrames >= _minFramesForAction;
-    } else {
-      _actionFrames = 0;
+    final probL = face.leftEyeOpenProbability ?? 1.0;
+    final probR = face.rightEyeOpenProbability ?? 1.0;
+    final avgOpen = (probL + probR) / 2.0;
+
+    if (!_eyesClosedDetected && avgOpen < _eyeClosedThreshold) {
+      _eyesClosedDetected = true;
+      debugPrint('[Liveness] Blink: Eyes SUB-THRESHOLD detected');
       return false;
     }
+
+    if (_eyesClosedDetected && avgOpen > _eyeOpenThreshold) {
+      debugPrint('[Liveness] Blink: Eyes RE-OPENED - PASS');
+      return true;
+    }
+
+    return false;
   }
 
   bool _checkMouthOpen(Face face) {
@@ -190,29 +206,6 @@ class LivenessService {
     }
   }
 
-  /// Passive checks for screen detection and 2D spoofing
-  bool _checkPassiveLiveness(Face face) {
-    // 1. Staticness check (prevents perfectly static images/frozen video)
-    if (_lastFaceRect != null) {
-      final areaDelta = (_faceArea(face) - _faceAreaFromRect(_lastFaceRect!))
-          .abs();
-      if (areaDelta < 0.001) {
-        // Face is too static, could be a photo or frozen video
-        return false;
-      }
-    }
-
-    // 2. 3D Perspective Check (Simplified moiré/depth)
-    // As face turns (eulerY), the bounding box width should shrink.
-    // In a 2D photo being turned, the scaling is linear.
-    // This is a complex check, so we mostly rely on Euler angles from ML Kit
-    // which are harder to fake on a flat surface.
-
-    return true;
-  }
-
-  double _faceAreaFromRect(Rect rect) => rect.width * rect.height;
-
   double _faceArea(Face face) {
     final bb = face.boundingBox;
     return bb.width * bb.height;
@@ -224,6 +217,7 @@ class LivenessService {
     _lastFaceRect = null;
     _activeChallenges = [];
     _currentChallengeIndex = 0;
+    _blinkStateReset();
   }
 
   void reset() {

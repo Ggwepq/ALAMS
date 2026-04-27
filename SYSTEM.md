@@ -577,6 +577,7 @@ The Android platform project uses Kotlin DSL (`build.gradle.kts`) for its Gradle
 | **Date/Time Formatting** | intl | ^0.20.2 | Locale-aware date display in UI and reports |
 | **File Path Resolution** | path_provider | ^2.1.5 | Platform-safe DB file path |
 | **Path Utilities** | path | ^1.9.1 | File path joining |
+| **App Icon Generation** | flutter_launcher_icons | ^0.13.1 | Automated generation of Android/iOS app icons from branding assets |
 | **Platform** | Android (Kotlin) | — | Host platform, Camera2 API, ML Kit native |
 
 ---
