@@ -151,7 +151,7 @@ class _ActionScreenState extends ConsumerState<ActionScreen>
                           children: [
                             _buildInfoRow(Icons.badge_outlined, 'ID', widget.employee.empId),
                             const Divider(color: Colors.white10, height: 24),
-                            _buildInfoRow(Icons.business_rounded, 'Dept', widget.employee.department),
+                            _buildInfoRow(Icons.business_rounded, 'Comp', widget.employee.department),
                             const Divider(color: Colors.white10, height: 24),
                             _buildInfoRow(Icons.email_outlined, 'Email', widget.employee.email.isEmpty ? 'Not set' : widget.employee.email),
                           ],

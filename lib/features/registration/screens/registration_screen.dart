@@ -426,6 +426,7 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
     ref.invalidate(employeesProvider);
     ref.invalidate(currentlyWorkingProvider);
     ref.invalidate(absentTodayProvider);
+    ref.invalidate(attendanceLogsTodayProvider);
     ref.invalidate(attendanceLogsWithNamesProvider);
   }
 
@@ -563,7 +564,7 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
             ),
             const SizedBox(height: 20),
 
-            _buildFieldLabel('Department'),
+            _buildFieldLabel('Company'),
             DropdownButtonFormField<String>(
               value: _selectedDepartment,
               dropdownColor: const Color(0xFF161B22),

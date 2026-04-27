@@ -47,6 +47,17 @@ class _ChallengeNotifier extends Notifier<LivenessChallenge?> {
   void set(LivenessChallenge? value) => state = value;
 }
 
+final livenessProgressProvider =
+    NotifierProvider<_ProgressNotifier, (int, int)>(
+  _ProgressNotifier.new,
+);
+
+class _ProgressNotifier extends Notifier<(int, int)> {
+  @override
+  (int, int) build() => (0, 0);
+  void update(int current, int total) => state = (current, total);
+}
+
 /// Holds the currently recognized employee name after a successful match.
 final recognizedEmployeeProvider =
     NotifierProvider<_RecognizedEmployeeNotifier, String?>(

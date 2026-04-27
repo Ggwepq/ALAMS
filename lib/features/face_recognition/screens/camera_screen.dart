@@ -206,12 +206,19 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
         if (!mounted) return;
         ref.read(livenessStateProvider.notifier).set(livenessState);
         ref.read(currentChallengeProvider.notifier).set(livenessService.currentChallenge);
+        ref.read(livenessProgressProvider.notifier).update(
+          livenessService.currentChallengeIndex,
+          livenessService.totalChallenges,
+        );
 
         // RESET LOGIC: If no face detected, reset the authenticity timer
         if (livenessState == LivenessState.waiting) {
           _realFaceFirstSeen = null;
           _spoofBuffer.clear();
+          _consensusName = null;
+          _consensusCount = 0;
           ref.read(spoofResultProvider.notifier).set(null);
+          ref.read(livenessProgressProvider.notifier).update(0, 0);
           return;
         }
 
@@ -265,9 +272,12 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
               debugPrint('[Security] SPOOF DETECTED (Consensus: $realCount/5)! Resetting.');
               _realFaceFirstSeen = null;
               _spoofBuffer.clear();
+              _consensusName = null;
+              _consensusCount = 0;
               livenessService.reset();
               livenessService.setSpoofDetected();
               ref.read(livenessStateProvider.notifier).set(LivenessState.spoofDetected);
+              ref.read(livenessProgressProvider.notifier).update(0, 0);
               
               // Trigger a longer warning period if needed
               if (!_spoofWarningResetInProgress) {
@@ -330,7 +340,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
 
     final knownFaces = employees
         .where((e) => e.facialEmbedding.isNotEmpty)
-        .map((e) => MapEntry(e.name, e.facialEmbedding))
+        .map((e) => MapEntry(e.empId, e.facialEmbedding))
         .toList();
     final result = await compute((data) {
       return FaceRecognitionService.findBestMatch(data.key, data.value);
@@ -348,10 +358,6 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
         _consensusCount = 1;
       }
       
-      if (mounted) {
-        // Updated UI via _LivenessStatusBadge parameters
-      }
-
       // 🛡️ DYNAMIC CONSENSUS: Higher confidence needs fewer frames for speed
       final requiredConsensus = result.distance < 0.35 ? 2 : _consensusThreshold;
       
@@ -361,11 +367,12 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
       }
 
       // Consensus reached!
-      final recognizedEmployee = employees.firstWhere((e) => e.name == result.label);
+      final recognizedEmployee = employees.firstWhere((e) => e.empId == result.label);
       ref.read(recognizedEmployeeProvider.notifier).set(recognizedEmployee.name);
       
       _consensusName = null;
       _consensusCount = 0;
+      ref.read(livenessProgressProvider.notifier).update(0, 0);
       
       await _cameraController?.stopImageStream();
       _nextAvailableRecognition = DateTime.now().add(const Duration(seconds: 5));
@@ -774,6 +781,7 @@ class _LivenessStatusBadge extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final challenge = ref.watch(currentChallengeProvider);
+    final progress = ref.watch(livenessProgressProvider);
 
     final (text, icon, color) = switch (state) {
       LivenessState.waiting => (
@@ -847,11 +855,18 @@ class _LivenessStatusBadge extends ConsumerWidget {
                       ),
                   ],
                 ),
-                if (state == LivenessState.passed && consensusCount > 0) ...[
+                if (state == LivenessState.performingChallenge) ...[
                    const SizedBox(width: 12),
                    Text(
-                     '[$consensusCount/$consensusThreshold]',
-                     style: const TextStyle(color: Colors.white70, fontSize: 14, fontWeight: FontWeight.bold),
+                     '[${progress.$1 + 1}/${progress.$2}]',
+                     style: const TextStyle(color: Colors.tealAccent, fontSize: 14, fontWeight: FontWeight.bold),
+                   ),
+                ],
+                if (state == LivenessState.passed && consensusCount > 0) ...[
+                   const SizedBox(width: 12),
+                   const Text(
+                     'VERIFYING...',
+                     style: TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.bold),
                    ),
                 ],
               ],
