@@ -4,6 +4,7 @@ import '../../../core/database/database_service.dart';
 import '../../../core/models/employee.dart';
 
 import '../providers/employee_provider.dart';
+import '../../attendance/providers/attendance_provider.dart';
 
 class EmployeeListScreen extends ConsumerStatefulWidget {
   const EmployeeListScreen({super.key});
@@ -16,6 +17,7 @@ class _EmployeeListScreenState extends ConsumerState<EmployeeListScreen> {
   final _searchController = TextEditingController();
   String _searchQuery = '';
   String? _filterDept;
+  String? _filterStatus;
   bool _isInit = true;
 
   @override
@@ -28,6 +30,10 @@ class _EmployeeListScreenState extends ConsumerState<EmployeeListScreen> {
         if (args.containsKey('department')) {
           _filterDept = args['department'];
           debugPrint('[EmployeeList] Filtering by Department: $_filterDept');
+        }
+        if (args.containsKey('status')) {
+          _filterStatus = args['status'];
+          debugPrint('[EmployeeList] Filtering by Status: $_filterStatus');
         }
       }
       _isInit = false;
@@ -42,22 +48,35 @@ class _EmployeeListScreenState extends ConsumerState<EmployeeListScreen> {
 
   @override
   Widget build(BuildContext context) {
+    debugPrint('[EmployeeList] Building with status=$_filterStatus dept=$_filterDept query=$_searchQuery');
+    
+    // Always watch the base employee list
     final employeesAsync = ref.watch(employeesProvider);
+    // Also watch today's logs to calculate "Working" vs "Absent" locally
+    final logsTodayAsync = ref.watch(attendanceLogsTodayProvider);
 
     return Scaffold(
       backgroundColor: const Color(0xFF0D1117),
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
-        title: Text(_filterDept == null ? 'Registered Persons' : '$_filterDept Personnel',
+        title: Text(
+          _filterStatus == 'working' 
+            ? 'Currently At Work' 
+            : _filterStatus == 'absent'
+              ? 'Absent Today'
+              : _filterDept == null ? 'Registered Persons' : '$_filterDept Personnel',
             style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
         iconTheme: const IconThemeData(color: Colors.white),
         actions: [
-          if (_filterDept != null)
+          if (_filterDept != null || _filterStatus != null)
             IconButton(
               icon: const Icon(Icons.filter_list_off),
-              onPressed: () => setState(() => _filterDept = null),
-              tooltip: 'Clear Dept Filter',
+              onPressed: () => setState(() {
+                _filterDept = null;
+                _filterStatus = null;
+              }),
+              tooltip: 'Clear Filters',
             ),
           const SizedBox(width: 8),
         ],
@@ -94,36 +113,82 @@ class _EmployeeListScreenState extends ConsumerState<EmployeeListScreen> {
           
           Expanded(
             child: RefreshIndicator(
-              onRefresh: () async => ref.invalidate(employeesProvider),
+              onRefresh: () async {
+                ref.invalidate(employeesProvider);
+                ref.invalidate(attendanceLogsTodayProvider);
+              },
               color: Colors.tealAccent,
               child: employeesAsync.when(
-                data: (employees) {
-                  // Apply Filters
-                  final filtered = employees.where((e) {
-                    final matchesName = e.name.toLowerCase().contains(_searchQuery.toLowerCase());
-                    final matchesDept = _filterDept == null || e.department == _filterDept;
-                    return matchesName && matchesDept;
-                  }).toList();
+                data: (allEmployees) {
+                  return logsTodayAsync.when(
+                    data: (logs) {
+                      // 1. Calculate Status-based IDs
+                      final Set<int> workingIds = {};
+                      final Set<int> timedInTodayIds = {};
 
-                  if (filtered.isEmpty) {
-                    return ListView( // Use ListView for RefreshIndicator to work
-                      children: [
-                        SizedBox(height: MediaQuery.of(context).size.height * 0.3),
-                        const Center(
-                          child: Text('No matching persons found.',
-                              style: TextStyle(color: Colors.white54)),
-                        ),
-                      ],
-                    );
-                  }
+                      // Group logs by employee to find their LATEST action today
+                      final Map<int, Map<String, dynamic>> latestLogs = {};
+                      for (final log in logs) {
+                        final empId = log['employee_id'] as int;
+                        final timestamp = log['timestamp'] as String;
+                        if (!latestLogs.containsKey(empId) || 
+                            timestamp.compareTo(latestLogs[empId]!['timestamp']) > 0) {
+                          latestLogs[empId] = log;
+                        }
+                        timedInTodayIds.add(empId);
+                      }
 
-                  return ListView.builder(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    itemCount: filtered.length,
-                    itemBuilder: (context, index) {
-                      final employee = filtered[index];
-                      return _EmployeeTile(employee: employee);
+                      for (final entry in latestLogs.entries) {
+                        if (entry.value['type'] == 'IN') {
+                          workingIds.add(entry.key);
+                        }
+                      }
+
+                      // 2. Perform Filtering
+                      final filtered = allEmployees.where((e) {
+                        // Name Filter
+                        final matchesName = e.name.toLowerCase().contains(_searchQuery.toLowerCase());
+                        
+                        // Dept Filter
+                        final matchesDept = _filterDept == null || e.department == _filterDept;
+                        
+                        // Status Filter
+                        bool matchesStatus = true;
+                        if (_filterStatus == 'working') {
+                          matchesStatus = workingIds.contains(e.id);
+                        } else if (_filterStatus == 'absent') {
+                          matchesStatus = !timedInTodayIds.contains(e.id);
+                        }
+
+                        return matchesName && matchesDept && matchesStatus;
+                      }).toList();
+
+                      if (filtered.isEmpty) {
+                        return ListView(
+                          children: [
+                            SizedBox(height: MediaQuery.of(context).size.height * 0.3),
+                            Center(
+                              child: Text(
+                                _filterStatus == 'absent' 
+                                  ? 'No one is absent yet.' 
+                                  : 'No matching persons found.',
+                                style: const TextStyle(color: Colors.white54)),
+                            ),
+                          ],
+                        );
+                      }
+
+                      return ListView.builder(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                        itemCount: filtered.length,
+                        itemBuilder: (context, index) {
+                          final employee = filtered[index];
+                          return _EmployeeTile(employee: employee);
+                        },
+                      );
                     },
+                    loading: () => const Center(child: CircularProgressIndicator(color: Colors.teal)),
+                    error: (e, st) => Center(child: Text('Error loading logs: $e')),
                   );
                 },
                 loading: () => const Center(child: CircularProgressIndicator(color: Colors.teal)),
@@ -211,9 +276,10 @@ class _EmployeeTile extends ConsumerWidget {
             onPressed: () async {
               await DatabaseService.instance.deleteEmployee(employee.id!);
               ref.invalidate(employeesProvider);
-              // Also invalidate logs since they might now show "Deleted Employee"
-              // We'll need to invalidate the name-joined logs
-              // (Assuming those providers are in registration_provider.dart or similar)
+              ref.invalidate(currentlyWorkingProvider);
+              ref.invalidate(absentTodayProvider);
+              ref.invalidate(attendanceLogsTodayProvider);
+              
               if (context.mounted) {
                 Navigator.pop(context);
                 ScaffoldMessenger.of(context).showSnackBar(

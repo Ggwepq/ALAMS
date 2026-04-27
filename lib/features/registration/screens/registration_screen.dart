@@ -426,6 +426,7 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
     ref.invalidate(employeesProvider);
     ref.invalidate(currentlyWorkingProvider);
     ref.invalidate(absentTodayProvider);
+    ref.invalidate(attendanceLogsTodayProvider);
     ref.invalidate(attendanceLogsWithNamesProvider);
   }
 

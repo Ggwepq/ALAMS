@@ -30,7 +30,7 @@ void main() async {
   await dotenv.load(fileName: '.env');
 
   await Supabase.initialize(
-    url:     dotenv.env['SUPABASE_URL']!,
+    url: dotenv.env['SUPABASE_URL']!,
     anonKey: dotenv.env['SUPABASE_ANON_KEY']!,
   );
 
@@ -47,22 +47,17 @@ void main() async {
   // Ensure static admin exists locally
   await DatabaseService.instance.ensureStaticAdmin();
 
-  await SystemChrome.setPreferredOrientations([
-    DeviceOrientation.portraitUp,
-  ]);
+  await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
 
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
-      statusBarColor:          Colors.transparent,
+      statusBarColor: Colors.transparent,
       statusBarIconBrightness: Brightness.light,
     ),
   );
 
   runApp(
-    UncontrolledProviderScope(
-      container: container,
-      child: const AlamsApp(),
-    ),
+    UncontrolledProviderScope(container: container, child: const AlamsApp()),
   );
 }
 
@@ -77,35 +72,38 @@ class AlamsApp extends StatelessWidget {
       navigatorObservers: [routeObserver],
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
-          seedColor:  Colors.teal,
+          seedColor: Colors.teal,
           brightness: Brightness.dark,
         ),
         scaffoldBackgroundColor: const Color(0xFF0D1117),
         useMaterial3: true,
-        fontFamily:   'Roboto',
+        fontFamily: 'Roboto',
       ),
       initialRoute: '/',
       onGenerateRoute: (settings) {
         switch (settings.name) {
           case '/':
-            return MaterialPageRoute(
-              builder: (_) => const RootGuardian(),
-            );
+            return MaterialPageRoute(builder: (_) => const RootGuardian());
 
           case '/action':
-            final args     = settings.arguments as Map<String, dynamic>;
+            final args = settings.arguments as Map<String, dynamic>;
             final employee = args['employee'] as Employee;
-            final action   = args['action']   as String?;
+            final action = args['action'] as String?;
             return PageRouteBuilder(
               pageBuilder: (ctx, anim, secAnim) =>
                   ActionScreen(employee: employee, presetAction: action),
               transitionsBuilder: (ctx, anim, secAnim, child) {
                 return SlideTransition(
-                  position: Tween<Offset>(
-                    begin: const Offset(0, 1),
-                    end:   Offset.zero,
-                  ).animate(CurvedAnimation(
-                      parent: anim, curve: Curves.easeOutCubic)),
+                  position:
+                      Tween<Offset>(
+                        begin: const Offset(0, 1),
+                        end: Offset.zero,
+                      ).animate(
+                        CurvedAnimation(
+                          parent: anim,
+                          curve: Curves.easeOutCubic,
+                        ),
+                      ),
                   child: child,
                 );
               },
@@ -114,14 +112,10 @@ class AlamsApp extends StatelessWidget {
 
           case '/camera':
             final mode = settings.arguments as String? ?? 'SCAN';
-            return MaterialPageRoute(
-              builder: (_) => CameraScreen(mode: mode),
-            );
+            return MaterialPageRoute(builder: (_) => CameraScreen(mode: mode));
 
           case '/admin_login':
-            return MaterialPageRoute(
-              builder: (_) => const AdminLoginScreen(),
-            );
+            return MaterialPageRoute(builder: (_) => const AdminLoginScreen());
 
           case '/departments':
             return MaterialPageRoute(
@@ -130,9 +124,7 @@ class AlamsApp extends StatelessWidget {
 
           case '/admin_dash':
           case '/admin_dashboard':
-            return MaterialPageRoute(
-              builder: (_) => const AdminDashboard(),
-            );
+            return MaterialPageRoute(builder: (_) => const AdminDashboard());
 
           case '/user_history':
             final employee = settings.arguments as Employee;
@@ -147,11 +139,16 @@ class AlamsApp extends StatelessWidget {
                   RegistrationScreen(editEmployee: editEmployee),
               transitionsBuilder: (ctx, anim, secAnim, child) {
                 return SlideTransition(
-                  position: Tween<Offset>(
-                    begin: const Offset(1, 0),
-                    end:   Offset.zero,
-                  ).animate(CurvedAnimation(
-                      parent: anim, curve: Curves.easeOutCubic)),
+                  position:
+                      Tween<Offset>(
+                        begin: const Offset(1, 0),
+                        end: Offset.zero,
+                      ).animate(
+                        CurvedAnimation(
+                          parent: anim,
+                          curve: Curves.easeOutCubic,
+                        ),
+                      ),
                   child: child,
                 );
               },
@@ -163,11 +160,16 @@ class AlamsApp extends StatelessWidget {
               pageBuilder: (ctx, anim, secAnim) => const ReportsScreen(),
               transitionsBuilder: (ctx, anim, secAnim, child) {
                 return SlideTransition(
-                  position: Tween<Offset>(
-                    begin: const Offset(-1, 0),
-                    end:   Offset.zero,
-                  ).animate(CurvedAnimation(
-                      parent: anim, curve: Curves.easeOutCubic)),
+                  position:
+                      Tween<Offset>(
+                        begin: const Offset(-1, 0),
+                        end: Offset.zero,
+                      ).animate(
+                        CurvedAnimation(
+                          parent: anim,
+                          curve: Curves.easeOutCubic,
+                        ),
+                      ),
                   child: child,
                 );
               },
@@ -175,20 +177,25 @@ class AlamsApp extends StatelessWidget {
             );
 
           case '/settings':
-            return MaterialPageRoute(
-              builder: (_) => const SettingsScreen(),
-            );
+            return MaterialPageRoute(builder: (_) => const SettingsScreen());
 
           case '/employee_list':
             return PageRouteBuilder(
+              settings:
+                  settings, // ← FIX: pass settings so ModalRoute.of(context)?.settings.arguments works
               pageBuilder: (ctx, anim, secAnim) => const EmployeeListScreen(),
               transitionsBuilder: (ctx, anim, secAnim, child) {
                 return SlideTransition(
-                  position: Tween<Offset>(
-                    begin: const Offset(0, 1),
-                    end:   Offset.zero,
-                  ).animate(CurvedAnimation(
-                      parent: anim, curve: Curves.easeOutCubic)),
+                  position:
+                      Tween<Offset>(
+                        begin: const Offset(0, 1),
+                        end: Offset.zero,
+                      ).animate(
+                        CurvedAnimation(
+                          parent: anim,
+                          curve: Curves.easeOutCubic,
+                        ),
+                      ),
                   child: child,
                 );
               },
@@ -196,9 +203,7 @@ class AlamsApp extends StatelessWidget {
             );
 
           default:
-            return MaterialPageRoute(
-              builder: (_) => const CameraScreen(),
-            );
+            return MaterialPageRoute(builder: (_) => const CameraScreen());
         }
       },
       builder: (context, child) {
@@ -259,7 +264,10 @@ class _WatermarkOverlayState extends State<WatermarkOverlay> {
   }
 
   Future<void> _checkWatermark() async {
-    final enabled = await DatabaseService.instance.getSetting('watermark_enabled', '1');
+    final enabled = await DatabaseService.instance.getSetting(
+      'watermark_enabled',
+      '1',
+    );
     if (mounted) {
       setState(() => _showWatermark = enabled == '1');
     }
@@ -303,10 +311,10 @@ class WatermarkPainter extends CustomPainter {
     const double spacingY = 180.0;
 
     canvas.save();
-    
+
     // Rotate around screen center to keep things centered
     canvas.translate(size.width / 2, size.height / 2);
-    canvas.rotate(-0.5); 
+    canvas.rotate(-0.5);
     canvas.translate(-size.width / 2, -size.height / 2);
 
     // Large enough range to cover the screen even when rotated

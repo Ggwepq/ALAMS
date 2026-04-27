@@ -49,6 +49,7 @@ class AdminDashboard extends ConsumerWidget {
                     value: workingCount.toString(),
                     icon: Icons.check_circle_rounded,
                     color: Colors.tealAccent,
+                    onTap: () => Navigator.pushNamed(context, '/employee_list', arguments: {'status': 'working'}),
                   ),
                   const SizedBox(width: 12),
                    _InsightCard(
@@ -56,6 +57,7 @@ class AdminDashboard extends ConsumerWidget {
                     value: absentCount.toString(),
                     icon: Icons.cancel_rounded,
                     color: const Color(0xFFE05E5E),
+                    onTap: () => Navigator.pushNamed(context, '/employee_list', arguments: {'status': 'absent'}),
                   ),
                   const SizedBox(width: 12),
                   _InsightCard(
@@ -63,6 +65,7 @@ class AdminDashboard extends ConsumerWidget {
                     value: totalCount.toString(),
                     icon: Icons.people_alt_rounded,
                     color: Colors.blueAccent,
+                    onTap: () => Navigator.pushNamed(context, '/employee_list'),
                   ),
                 ],
               ),
@@ -273,46 +276,52 @@ class _InsightCard extends StatelessWidget {
   final String value;
   final IconData icon;
   final Color color;
+  final VoidCallback? onTap;
 
   const _InsightCard({
     required this.label,
     required this.value,
     required this.icon,
     required this.color,
+    this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: 140,
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.03),
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: Colors.white.withOpacity(0.05)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: color.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(12),
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(24),
+      child: Container(
+        width: 140,
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.03),
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(color: Colors.white.withOpacity(0.05)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: color.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(icon, color: color, size: 20),
             ),
-            child: Icon(icon, color: color, size: 20),
-          ),
-          const SizedBox(height: 16),
-          Text(
-            value,
-            style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            label,
-            style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 12, fontWeight: FontWeight.w500),
-          ),
-        ],
+            const SizedBox(height: 16),
+            Text(
+              value,
+              style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              label,
+              style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 12, fontWeight: FontWeight.w500),
+            ),
+          ],
+        ),
       ),
     );
   }
