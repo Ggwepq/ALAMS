@@ -352,7 +352,10 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
         // Updated UI via _LivenessStatusBadge parameters
       }
 
-      if (_consensusCount < _consensusThreshold) {
+      // 🛡️ DYNAMIC CONSENSUS: Higher confidence needs fewer frames for speed
+      final requiredConsensus = result.distance < 0.35 ? 2 : _consensusThreshold;
+      
+      if (_consensusCount < requiredConsensus) {
         // Continue processing frames to build consensus
         return;
       }

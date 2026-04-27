@@ -74,11 +74,14 @@ class FaceRecognitionService {
       int scanHeight = height;
 
       if (cropRect != null) {
-        // Use the provided rect directly (assumed to be in buffer coordinates)
-        startX = cropRect.left.toInt().clamp(0, width - 1);
-        startY = cropRect.top.toInt().clamp(0, height - 1);
-        scanWidth = cropRect.width.toInt().clamp(1, width - startX);
-        scanHeight = cropRect.height.toInt().clamp(1, height - startY);
+        // 🛡️ Add 10% padding to ensure peripheral features are captured
+        final double paddingX = cropRect.width * 0.10;
+        final double paddingY = cropRect.height * 0.10;
+        
+        startX = (cropRect.left - paddingX).toInt().clamp(0, width - 1);
+        startY = (cropRect.top - paddingY).toInt().clamp(0, height - 1);
+        scanWidth = (cropRect.width + (paddingX * 2)).toInt().clamp(1, width - startX);
+        scanHeight = (cropRect.height + (paddingY * 2)).toInt().clamp(1, height - startY);
       }
 
       // Target size for FaceNet
@@ -114,6 +117,9 @@ class FaceRecognitionService {
 
       // DEBUG: Save the cropped face to disk if requested
       final String? debugPath = args['debugPath'];
+      // 🛡️ Brightness Equalization: Normalize light levels to help the AI "see" in shadows
+      _calibrateBrightness(processedImage);
+
       if (debugPath != null) {
         File(debugPath).writeAsBytesSync(img.encodeJpg(processedImage));
         debugPrint('[FaceRecognition] Debug image saved: $debugPath');
@@ -123,6 +129,28 @@ class FaceRecognitionService {
     } catch (e) {
       debugPrint('[FaceRecognition] Preprocessing error: $e');
       return null;
+    }
+  }
+
+  /// Stretches the image histogram to improve contrast in low light.
+  static void _calibrateBrightness(img.Image image) {
+    num minV = 255;
+    num maxV = 0;
+
+    for (final pixel in image) {
+      final lum = (0.299 * pixel.r) + (0.587 * pixel.g) + (0.114 * pixel.b);
+      if (lum < minV) minV = lum;
+      if (lum > maxV) maxV = lum;
+    }
+
+    // Only stretch if there's enough range to work with and it's actually dim
+    if (maxV - minV > 10 && maxV < 200) {
+      final factor = 255.0 / (maxV - minV);
+      for (final pixel in image) {
+        pixel.r = ((pixel.r - minV) * factor).clamp(0, 255);
+        pixel.g = ((pixel.g - minV) * factor).clamp(0, 255);
+        pixel.b = ((pixel.b - minV) * factor).clamp(0, 255);
+      }
     }
   }
 
@@ -220,9 +248,13 @@ class FaceRecognitionService {
     }
 
     final margin      = secondDist - bestDist;
-    final isRecognized = bestDist < threshold && margin >= minMargin;
+    
+    // 🛡️ ADAPTIVE MARGIN: If the best match is exceptionally strong (< 0.35), 
+    // we ignore the margin safety check to ensure recall.
+    final bool isStrongMatch = bestDist < 0.35;
+    final isRecognized = bestDist < threshold && (isStrongMatch || margin >= minMargin);
 
-    debugPrint('[FaceRecognition] best=$bestDist margin=$margin → recognized=$isRecognized');
+    debugPrint('[FaceRecognition] best=$bestDist margin=$margin strong=$isStrongMatch → recognized=$isRecognized');
 
     return RecognitionResult(
       label:        bestLabel,
