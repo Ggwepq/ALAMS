@@ -8,7 +8,6 @@ on:
 
 jobs:
   build-and-release:
-    # Only run if the PR was merged
     if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     
@@ -19,17 +18,18 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # Fetches all tags so we can check if the version exists
+          fetch-depth: 0
 
-      # 1. Extract Version from PR Title
+      # 1. Extract Version from PR Title (Updated Regex)
       - name: Extract version
         id: get_version
         run: |
           TITLE="${{ github.event.pull_request.title }}"
-          VERSION=$(echo "$TITLE" | grep -oP 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+          # Matches vX.X or vX.X.X or vX.X.X.X
+          VERSION=$(echo "$TITLE" | grep -oP 'v[0-9]+(\.[0-9]+)+' | head -1)
           
           if [ -z "$VERSION" ]; then
-            echo "ERROR_MSG=No version pattern (e.g. v2.1.1) found in PR title." >> $GITHUB_ENV
+            echo "ERROR_MSG=No version pattern (e.g. v1.0 or v2.1.1) found in PR title." >> $GITHUB_ENV
             echo "SKIP_RELEASE=true" >> $GITHUB_ENV
           else
             echo "VERSION=$VERSION" >> $GITHUB_ENV
@@ -48,12 +48,11 @@ jobs:
             echo "TAG_EXISTS=false" >> $GITHUB_ENV
           fi
 
-      # 3. Setup Flutter (Only if version is new)
+      # 3. Setup Flutter
       - name: Setup Flutter
         if: env.SKIP_RELEASE == 'false' && env.TAG_EXISTS == 'false'
         uses: subosito/flutter-action@v2
         with:
-          # channel: 'stable' # Using default stable
           cache: true
 
       - name: Install dependencies
@@ -82,7 +81,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # 7. Log why it skipped (Fixed Syntax)
+      # 7. Log why it skipped
       - name: Log skip reason
         if: always() && (env.SKIP_RELEASE == 'true' || env.TAG_EXISTS == 'true')
         run: |
