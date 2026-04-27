@@ -117,7 +117,7 @@ class AlamsApp extends StatelessWidget {
           case '/admin_login':
             return MaterialPageRoute(builder: (_) => const AdminLoginScreen());
 
-          case '/departments':
+          case '/companies':
             return MaterialPageRoute(
               builder: (_) => const DepartmentManagementScreen(),
             );

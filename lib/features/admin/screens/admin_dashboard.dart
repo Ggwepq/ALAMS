@@ -95,11 +95,11 @@ class AdminDashboard extends ConsumerWidget {
             ),
             _buildMenuTile(
               context,
-              title: 'Manage Departments',
+              title: 'Manage Companies',
               subtitle: 'Add or remove organizations',
               icon: Icons.business_rounded,
               color: Colors.orangeAccent,
-              route: '/departments',
+              route: '/companies',
             ),
             _buildMenuTile(
               context,
