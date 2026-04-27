@@ -71,6 +71,7 @@ class NcnnAntiSpoofService {
         ncnnOrientation = 1; 
       }
 
+      final double threshold = 0.80; // Adjusted for better inclusivity of varied skin tones
       final double confidence = await _channel.invokeMethod<double>('detect', {
         'nv21': nv21,
         'width': image.width,
@@ -82,11 +83,11 @@ class NcnnAntiSpoofService {
         'bottom': bottom,
       }) ?? -1.0;
 
-      final bool isReal = confidence > 0.915;
+      final bool isReal = confidence > threshold;
       final double conf = confidence.clamp(0.0, 1.0);
 
       debugPrint('[NcnnAntiSpoof] Score: ${confidence.toStringAsFixed(4)} | '
-          '${isReal ? "REAL" : "SPOOF"} (threshold=0.915)');
+          '${isReal ? "REAL" : "SPOOF"} (threshold=$threshold)');
 
       Uint8List? faceCrop;
       try {
@@ -105,7 +106,7 @@ class NcnnAntiSpoofService {
       return SpoofResult(
         isReal: isReal,
         confidence: conf,
-        diagnostics: [confidence, 0.915],
+        diagnostics: [confidence, threshold],
         faceCrop: faceCrop,
       );
     } catch (e) {

@@ -53,6 +53,8 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
 
   RegistrationPose _currentPose = RegistrationPose.front;
   final List<List<double>> _capturedEmbeddings = [];
+  final List<List<double>> _currentPoseSubEmbeddings = [];
+  final int _subFramesPerPose = 3;
 
   final FaceDetector _faceDetector = FaceDetector(
     options: FaceDetectorOptions(
@@ -66,6 +68,7 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
   String _statusMessage           = 'Look directly at the camera';
   String _errorMessage            = '';
   bool _obscurePassword           = true;
+  FlashMode _flashMode            = FlashMode.off;
 
   @override
   void initState() {
@@ -140,11 +143,22 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
     await _cameraController!.initialize();
     if (!mounted) return;
 
+    // ⚡ Auto-enable flash for registration
+    _flashMode = FlashMode.torch;
+    await _cameraController!.setFlashMode(_flashMode);
+
     setState(() => _isCameraReady = true);
 
     // Ensure model is loaded before starting stream
     await FaceRecognitionService.instance.loadModel();
     _cameraController!.startImageStream(_onFrame);
+  }
+
+  Future<void> _toggleFlash() async {
+    if (_cameraController == null) return;
+    final nextMode = _flashMode == FlashMode.torch ? FlashMode.off : FlashMode.torch;
+    await _cameraController!.setFlashMode(nextMode);
+    if (mounted) setState(() => _flashMode = nextMode);
   }
 
   // ─── Guided Frame Processing ──────────────────────────────────────────────
@@ -201,8 +215,8 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
         final embedding = faceService.generateEmbedding(preprocessed);
         if (embedding == null) return; // skip frame if embedding failed
 
-        // Duplicate check on first pose only
-        if (_currentPose == RegistrationPose.front) {
+        // Duplicate check on first pose, first sub-frame only
+        if (_currentPose == RegistrationPose.front && _currentPoseSubEmbeddings.isEmpty) {
           final db           = DatabaseService.instance;
           final allEmployees = await db.getAllEmployees();
           final knownFaces   = allEmployees
@@ -221,6 +235,7 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
                   _step         = RegistrationStep.enterName;
                   _isCameraReady = false;
                   _capturedEmbeddings.clear();
+                  _currentPoseSubEmbeddings.clear();
                 });
               }
               return;
@@ -228,8 +243,18 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
           }
         }
 
-        _capturedEmbeddings.add(embedding);
-        _moveToNextPose();
+        _currentPoseSubEmbeddings.add(embedding);
+        if (_currentPoseSubEmbeddings.length >= _subFramesPerPose) {
+          _capturedEmbeddings.add(_averageEmbeddings(_currentPoseSubEmbeddings));
+          _currentPoseSubEmbeddings.clear();
+          _moveToNextPose();
+        } else {
+          if (mounted) {
+            setState(() {
+              _statusMessage = 'Processing orientation data (${_currentPoseSubEmbeddings.length}/$_subFramesPerPose)';
+            });
+          }
+        }
       } else {
         _updateInstructionForPose();
       }
@@ -261,6 +286,7 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
     setState(() {
       _currentPose = RegistrationPose.values[_currentPose.index + 1];
       if (_currentPose == RegistrationPose.done) {
+        _cameraController?.setFlashMode(FlashMode.off);
         _cameraController?.stopImageStream();
         _saveEmployee();
       } else {
@@ -747,6 +773,25 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
         ),
 
         Positioned(
+          top: 50,
+          right: 20,
+          child: Column(
+            children: [
+              FloatingActionButton.small(
+                onPressed: _toggleFlash,
+                backgroundColor: _flashMode == FlashMode.torch ? Colors.tealAccent : Colors.black54,
+                child: Icon(
+                  _flashMode == FlashMode.torch ? Icons.flash_on : Icons.flash_off,
+                  color: _flashMode == FlashMode.torch ? Colors.black87 : Colors.white70,
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Text('FLASH', style: TextStyle(color: Colors.white60, fontSize: 10, fontWeight: FontWeight.bold)),
+            ],
+          ),
+        ),
+
+        Positioned(
           top: 100,
           left: 0,
           right: 0,
@@ -767,6 +812,24 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
                     fontWeight: FontWeight.bold),
                 textAlign: TextAlign.center,
               ),
+              const SizedBox(height: 8),
+              // Sub-frame progress dots
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: List.generate(_subFramesPerPose, (index) {
+                  final active = index < _currentPoseSubEmbeddings.length;
+                  return AnimatedContainer(
+                    duration: const Duration(milliseconds: 300),
+                    margin: const EdgeInsets.symmetric(horizontal: 4),
+                    width: active ? 12 : 8,
+                    height: 8,
+                    decoration: BoxDecoration(
+                      color: active ? Colors.tealAccent : Colors.white24,
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                  );
+                }),
+              ),
               const SizedBox(height: 16),
               LinearProgressIndicator(
                 value:            progress,
@@ -777,7 +840,7 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
               ),
               const SizedBox(height: 8),
               Text(
-                  'Step ${_capturedEmbeddings.length + 1} of 5',
+                  'Orientation: ${_capturedEmbeddings.length + 1} of 5',
                   style: const TextStyle(color: Colors.white60, fontSize: 12)),
             ],
           ),

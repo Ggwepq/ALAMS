@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -44,11 +45,13 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
   // High-Security Phase Tracking
   DateTime? _realFaceFirstSeen;
   bool _spoofWarningResetInProgress = false;
+  final List<bool> _spoofBuffer = [];
 
   // Identity Consensus Buffer
   String? _consensusName;
   int _consensusCount = 0;
-  final int _consensusThreshold = 3;
+  final int _consensusThreshold = 3; // Reduced to 3 for faster identification
+  RecognitionResult? _lastRecognitionResult;
 
   @override
   void initState() {
@@ -207,6 +210,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
         // RESET LOGIC: If no face detected, reset the authenticity timer
         if (livenessState == LivenessState.waiting) {
           _realFaceFirstSeen = null;
+          _spoofBuffer.clear();
           ref.read(spoofResultProvider.notifier).set(null);
           return;
         }
@@ -231,8 +235,15 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
             if (!mounted) return;
             ref.read(spoofResultProvider.notifier).set(spoofResult);
 
-            if (spoofResult.isReal) {
-              // FACE IS REAL
+            // 🛡️ ANTI-SPOOF CONSENSUS: Rolling window majority vote
+            _spoofBuffer.add(spoofResult.isReal);
+            if (_spoofBuffer.length > 5) _spoofBuffer.removeAt(0);
+
+            final realCount = _spoofBuffer.where((v) => v).length;
+            final isAuthentic = realCount >= 3; 
+
+            if (isAuthentic) {
+              // FACE IS REAL (By consensus)
               if (isStabilityStage) {
                 // Phase 1: Wait for 2 seconds of consistency
                 if (_realFaceFirstSeen == null) {
@@ -249,10 +260,11 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
                 }
               }
               // If already performing challenge, we just continue.
-            } else {
-              // FACE IS SPOOF
-              debugPrint('[Security] SPOOF DETECTED! Resetting process.');
+            } else if (_spoofBuffer.length >= 3) {
+              // FACE IS SPOOF (By consensus - only trigger if we have enough samples)
+              debugPrint('[Security] SPOOF DETECTED (Consensus: $realCount/5)! Resetting.');
               _realFaceFirstSeen = null;
+              _spoofBuffer.clear();
               livenessService.reset();
               livenessService.setSpoofDetected();
               ref.read(livenessStateProvider.notifier).set(LivenessState.spoofDetected);
@@ -324,6 +336,10 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
       return FaceRecognitionService.findBestMatch(data.key, data.value);
     }, MapEntry(liveEmbedding, knownFaces));
 
+    if (mounted) {
+      setState(() => _lastRecognitionResult = result);
+    }
+
     if (result.isRecognized) {
       if (_consensusName == result.label) {
         _consensusCount++;
@@ -336,7 +352,10 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
         // Updated UI via _LivenessStatusBadge parameters
       }
 
-      if (_consensusCount < _consensusThreshold) {
+      // 🛡️ DYNAMIC CONSENSUS: Higher confidence needs fewer frames for speed
+      final requiredConsensus = result.distance < 0.35 ? 2 : _consensusThreshold;
+      
+      if (_consensusCount < requiredConsensus) {
         // Continue processing frames to build consensus
         return;
       }
@@ -598,6 +617,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen> with RouteAware {
               isSpeculating: _isSpeculating,
               consensusCount: _consensusCount,
               consensusThreshold: _consensusThreshold,
+              recognitionResult: _lastRecognitionResult,
             ),
           ),
 
@@ -741,11 +761,14 @@ class _LivenessStatusBadge extends ConsumerWidget {
   final bool isSpeculating;
   final int consensusCount;
   final int consensusThreshold;
+  final RecognitionResult? recognitionResult;
+
   const _LivenessStatusBadge({
     required this.state, 
     required this.isSpeculating,
     required this.consensusCount,
     required this.consensusThreshold,
+    this.recognitionResult,
   });
 
   @override
@@ -803,17 +826,32 @@ class _LivenessStatusBadge extends ConsumerWidget {
                 else
                   Icon(icon, color: color, size: 20),
                 const SizedBox(width: 8),
-                Text(
-                  state == LivenessState.passed && isSpeculating ? 'HIGH-SECURITY AI SCAN' : text,
-                  style: TextStyle(
-                      color: color, fontSize: 15, fontWeight: FontWeight.bold),
-                  textAlign: TextAlign.center,
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      state == LivenessState.passed && isSpeculating ? 'HIGH-SECURITY AI SCAN' : text,
+                      style: TextStyle(
+                          color: color, fontSize: 15, fontWeight: FontWeight.bold),
+                    ),
+                    if (recognitionResult != null && recognitionResult!.label != 'Unknown')
+                      Text(
+                        'AI MATCH SCORE: ${(math.max(0, 1.0 - recognitionResult!.distance) * 100).toStringAsFixed(0)}%',
+                        style: TextStyle(
+                          color: color.withAlpha(180),
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                  ],
                 ),
                 if (state == LivenessState.passed && consensusCount > 0) ...[
-                   const SizedBox(height: 8),
+                   const SizedBox(width: 12),
                    Text(
-                     'Step: Identity Consensus [$consensusCount/$consensusThreshold]',
-                     style: const TextStyle(color: Colors.white70, fontSize: 12),
+                     '[$consensusCount/$consensusThreshold]',
+                     style: const TextStyle(color: Colors.white70, fontSize: 14, fontWeight: FontWeight.bold),
                    ),
                 ],
               ],
