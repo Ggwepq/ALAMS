@@ -197,8 +197,8 @@ class FaceRecognitionService {
   static RecognitionResult findBestMatch(
     List<double> liveEmbedding,
     List<MapEntry<String, List<double>>> knownFaces, {
-    double threshold = 0.38,  // tightened further after cropping fix
-    double minMargin = 0.10,  // increased to require clearer distinction
+    double threshold = 0.55,  // Balanced for mobile deployment (0.50-0.60 is standard)
+    double minMargin = 0.05,  // Reduced to handle siblings or similar features
   }) {
     if (knownFaces.isEmpty) {
       return const RecognitionResult(label: 'Unknown', distance: 1.0, isRecognized: false);
@@ -238,7 +238,7 @@ class FaceRecognitionService {
   static String? checkDuplicateEmbedding(
     List<double> newEmbedding,
     List<MapEntry<String, List<double>>> existingFaces, {
-    double duplicateThreshold = 0.35, // stricter than recognition threshold
+    double duplicateThreshold = 0.30, // stricter check to prevent false positives
   }) {
     for (final entry in existingFaces) {
       final dist = cosineDistance(newEmbedding, entry.value);
