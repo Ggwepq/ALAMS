@@ -13,14 +13,7 @@ import '../providers/employee_provider.dart';
 
 enum RegistrationStep { enterName, scanFace, processing, success, error }
 
-enum RegistrationPose {
-  front,
-  left,
-  right,
-  up,
-  blink,
-  done
-}
+enum RegistrationPose { front, left, right, up, blink, done }
 
 class RegistrationScreen extends ConsumerStatefulWidget {
   final Employee? editEmployee;
@@ -45,14 +38,18 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
   bool _isFirstAdmin         = false;
 
   CameraController? _cameraController;
-  bool _isCameraReady      = false;
-  bool _isProcessingFrame  = false;
-  int _stabilityCount      = 0;
-  bool _hasBlinked         = false;
-  final int _stabilityThreshold = 3; // ~1 second with 300ms throttling
+  bool _isCameraReady     = false;
+  bool _isProcessingFrame = false;
+  int _stabilityCount     = 0;
+  bool _hasBlinked        = false;
+  final int _stabilityThreshold = 3; // ~1 second at 300 ms throttle
 
   RegistrationPose _currentPose = RegistrationPose.front;
+
+  /// One averaged (L2-normalised) embedding per completed pose.
   final List<List<double>> _capturedEmbeddings = [];
+
+  /// Raw sub-frame embeddings collected for the current pose.
   final List<List<double>> _currentPoseSubEmbeddings = [];
   final int _subFramesPerPose = 3;
 
@@ -64,11 +61,16 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
     ),
   );
 
-  RegistrationStep _step          = RegistrationStep.enterName;
-  String _statusMessage           = 'Look directly at the camera';
-  String _errorMessage            = '';
-  bool _obscurePassword           = true;
-  FlashMode _flashMode            = FlashMode.off;
+  RegistrationStep _step = RegistrationStep.enterName;
+  String _statusMessage  = 'Look directly at the camera';
+  String _errorMessage   = '';
+  bool _obscurePassword  = true;
+  FlashMode _flashMode   = FlashMode.off;
+
+  /// Sensor rotation for the front camera (degrees). Most Android front cams
+  /// report 270 °; iOS is typically 0 °. Read from the camera description at
+  /// init time so preprocessing rotates the buffer correctly.
+  int _sensorRotation = 270;
 
   @override
   void initState() {
@@ -77,14 +79,13 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
   }
 
   Future<void> _loadInitialData() async {
-    final db    = DatabaseService.instance;
-    final depts = await db.getAllDepartments();
-    final count = await db.getEmployeeCount();
+    final db       = DatabaseService.instance;
+    final depts    = await db.getAllDepartments();
     final hasAdmin = await db.hasAdmin();
 
     if (mounted) {
       setState(() {
-        _departments = depts.map((d) => d.name).toList();
+        _departments  = depts.map((d) => d.name).toList();
         _isFirstAdmin = !hasAdmin;
 
         if (widget.editEmployee != null) {
@@ -101,9 +102,7 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
           db.getNextEmployeeId('EMP').then((nextId) {
             if (mounted) setState(() => _empIdController.text = nextId);
           });
-          if (_departments.isNotEmpty) {
-            _selectedDepartment = _departments.first;
-          }
+          if (_departments.isNotEmpty) _selectedDepartment = _departments.first;
         }
       });
     }
@@ -123,15 +122,19 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
     super.dispose();
   }
 
-  // ─── Camera Init ─────────────────────────────────────────────────────────
+  // ─── Camera Init ──────────────────────────────────────────────────────────
 
   Future<void> _initCamera() async {
     final cameras = await availableCameras();
     if (cameras.isEmpty) return;
+
     final front = cameras.firstWhere(
       (c) => c.lensDirection == CameraLensDirection.front,
       orElse: () => cameras.first,
     );
+
+    // Capture sensor rotation so preprocessing rotates the YUV buffer correctly.
+    _sensorRotation = front.sensorOrientation;
 
     _cameraController = CameraController(
       front,
@@ -143,22 +146,21 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
     await _cameraController!.initialize();
     if (!mounted) return;
 
-    // ⚡ Auto-enable flash for registration
     _flashMode = FlashMode.torch;
     await _cameraController!.setFlashMode(_flashMode);
 
     setState(() => _isCameraReady = true);
 
-    // Ensure model is loaded before starting stream
     await FaceRecognitionService.instance.loadModel();
     _cameraController!.startImageStream(_onFrame);
   }
 
   Future<void> _toggleFlash() async {
     if (_cameraController == null) return;
-    final nextMode = _flashMode == FlashMode.torch ? FlashMode.off : FlashMode.torch;
-    await _cameraController!.setFlashMode(nextMode);
-    if (mounted) setState(() => _flashMode = nextMode);
+    final next =
+        _flashMode == FlashMode.torch ? FlashMode.off : FlashMode.torch;
+    await _cameraController!.setFlashMode(next);
+    if (mounted) setState(() => _flashMode = next);
   }
 
   // ─── Guided Frame Processing ──────────────────────────────────────────────
@@ -170,17 +172,17 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
     if (_currentPose == RegistrationPose.done) return;
 
     final now = DateTime.now();
-    if (now.difference(_lastProcessed) < const Duration(milliseconds: 300)) return;
+    if (now.difference(_lastProcessed) < const Duration(milliseconds: 300))
+      return;
     _lastProcessed = now;
 
     _isProcessingFrame = true;
 
     try {
-      // Ensure model is loaded
       final faceService = FaceRecognitionService.instance;
       if (!faceService.isLoaded) {
         await faceService.loadModel();
-        return; // skip this frame, try next
+        return;
       }
 
       final inputImage = _buildInputImage(image);
@@ -188,51 +190,64 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
 
       final faces = await _faceDetector.processImage(inputImage);
       if (faces.isEmpty) {
-        if (mounted) setState(() => _statusMessage = 'No face detected. Move closer.');
+        if (mounted)
+          setState(() => _statusMessage = 'No face detected. Move closer.');
         return;
       }
 
-      final face         = faces.first;
-      final bool isPoseValid = _checkPose(face);
+      final face        = faces.first;
+      final isPoseValid = _checkPose(face);
 
       if (isPoseValid) {
-        if (_currentPose == RegistrationPose.front && _stabilityCount < _stabilityThreshold) {
+        // Front-pose stability gate: wait for a few stable frames before
+        // capturing so we don't grab a blurry transitional frame.
+        if (_currentPose == RegistrationPose.front &&
+            _stabilityCount < _stabilityThreshold) {
           _stabilityCount++;
-          if (mounted) setState(() => _statusMessage = 'Hold still... (${_stabilityCount}/${_stabilityThreshold})');
+          if (mounted)
+            setState(() => _statusMessage =
+                'Hold still… (${_stabilityCount}/$_stabilityThreshold)');
           return;
         }
 
-        if (_currentPose == RegistrationPose.blink) {
-          _hasBlinked = true;
-        }
+        if (_currentPose == RegistrationPose.blink) _hasBlinked = true;
 
-        final preprocessed = FaceRecognitionService.preprocessCameraImage({
-          'image': image,
-          'cropRect': _getOvalBufferRect(image.width, image.height),
+        // ── Preprocess frame ──────────────────────────────────────────────
+        final preprocessed =
+            FaceRecognitionService.preprocessCameraImage({
+          'image':          image,
+          'cropRect':       _getOvalBufferRect(image.width, image.height),
+          'sensorRotation': _sensorRotation, // ✅ pass actual sensor rotation
         });
-        if (preprocessed == null) return; // skip frame if preprocessing failed
+        if (preprocessed == null) return;
 
+        // ── Generate L2-normalised embedding ─────────────────────────────
         final embedding = faceService.generateEmbedding(preprocessed);
-        if (embedding == null) return; // skip frame if embedding failed
+        if (embedding == null) return;
 
-        // Duplicate check on first pose, first sub-frame only
-        if (_currentPose == RegistrationPose.front && _currentPoseSubEmbeddings.isEmpty) {
+        // ── Duplicate check (first sub-frame of first pose only) ──────────
+        if (_currentPose == RegistrationPose.front &&
+            _currentPoseSubEmbeddings.isEmpty) {
           final db           = DatabaseService.instance;
           final allEmployees = await db.getAllEmployees();
           final knownFaces   = allEmployees
-              .where((e) => e.facialEmbedding.isNotEmpty && (widget.editEmployee == null || e.id != widget.editEmployee!.id))
+              .where((e) =>
+                  e.facialEmbedding.isNotEmpty &&
+                  (widget.editEmployee == null ||
+                      e.id != widget.editEmployee!.id))
               .map((e) => MapEntry(e.name, e.facialEmbedding))
               .toList();
 
+          // Uses kDuplicateThreshold (Euclidean 0.60) from the service.
           final duplicateName = FaceRecognitionService.checkDuplicateEmbedding(
               embedding, knownFaces);
           if (duplicateName != null) {
-            final bool? continueReg = await _showDuplicateFaceWarning(duplicateName);
-            if (continueReg != true) {
+            final bool? cont = await _showDuplicateFaceWarning(duplicateName);
+            if (cont != true) {
               _cameraController?.stopImageStream();
               if (mounted) {
                 setState(() {
-                  _step         = RegistrationStep.enterName;
+                  _step          = RegistrationStep.enterName;
                   _isCameraReady = false;
                   _capturedEmbeddings.clear();
                   _currentPoseSubEmbeddings.clear();
@@ -243,16 +258,21 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
           }
         }
 
+        // ── Accumulate sub-frame embeddings ───────────────────────────────
         _currentPoseSubEmbeddings.add(embedding);
+
         if (_currentPoseSubEmbeddings.length >= _subFramesPerPose) {
-          _capturedEmbeddings.add(_averageEmbeddings(_currentPoseSubEmbeddings));
+          // Average + L2-normalise via the service helper (not a local impl).
+          final poseEmbedding =
+              FaceRecognitionService.averageEmbeddings(_currentPoseSubEmbeddings);
+          _capturedEmbeddings.add(poseEmbedding);
           _currentPoseSubEmbeddings.clear();
           _moveToNextPose();
         } else {
           if (mounted) {
-            setState(() {
-              _statusMessage = 'Processing orientation data (${_currentPoseSubEmbeddings.length}/$_subFramesPerPose)';
-            });
+            setState(() => _statusMessage =
+                'Processing orientation data '
+                '(${_currentPoseSubEmbeddings.length}/$_subFramesPerPose)');
           }
         }
       } else {
@@ -283,8 +303,10 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
 
   void _moveToNextPose() {
     if (!mounted) return;
+    _stabilityCount = 0; // reset for next front-pose check
     setState(() {
-      _currentPose = RegistrationPose.values[_currentPose.index + 1];
+      _currentPose =
+          RegistrationPose.values[_currentPose.index + 1];
       if (_currentPose == RegistrationPose.done) {
         _cameraController?.setFlashMode(FlashMode.off);
         _cameraController?.stopImageStream();
@@ -305,15 +327,13 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
       RegistrationPose.blink => 'Now, BLINK your eyes',
       _                      => '',
     };
-    if (_statusMessage != msg) {
-      setState(() => _statusMessage = msg);
-    }
+    if (_statusMessage != msg) setState(() => _statusMessage = msg);
   }
 
   InputImage? _buildInputImage(CameraImage image) {
     if (_cameraController == null) return null;
     return buildInputImageForMLKit(
-      image: image,
+      image:  image,
       camera: _cameraController!.description,
     );
   }
@@ -326,9 +346,8 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
     try {
       final db = DatabaseService.instance;
 
-      // Guard: non-admin MUST have captured embeddings and blinked
-      if (!_isFirstAdmin &&
-          !(widget.editEmployee?.isAdmin ?? false)) {
+      // Guard: non-admin MUST have captured embeddings and blinked.
+      if (!_isFirstAdmin && !(widget.editEmployee?.isAdmin ?? false)) {
         if (_capturedEmbeddings.isEmpty) {
           setState(() {
             _step         = RegistrationStep.error;
@@ -339,15 +358,18 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
         if (!_hasBlinked) {
           setState(() {
             _step         = RegistrationStep.error;
-            _errorMessage = 'Liveness check failed (no blink detected). Please try again.';
+            _errorMessage =
+                'Liveness check failed (no blink detected). Please try again.';
           });
           return;
         }
       }
 
+      // Final averaged + L2-normalised embedding across all poses.
       final avgEmbedding = _capturedEmbeddings.isEmpty
-          ? (widget.editEmployee?.facialEmbedding ?? List<double>.filled(128, 0.0))
-          : _averageEmbeddings(_capturedEmbeddings);
+          ? (widget.editEmployee?.facialEmbedding ??
+              List<double>.filled(128, 0.0))
+          : FaceRecognitionService.averageEmbeddings(_capturedEmbeddings);
 
       final name     = _nameController.text.trim();
       final email    = _emailController.text.trim();
@@ -356,7 +378,6 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
       final empId    = _empIdController.text.trim();
 
       if (widget.editEmployee != null) {
-        // EDIT MODE
         final updated = Employee(
           id:              widget.editEmployee!.id,
           name:            name,
@@ -368,23 +389,25 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
           empId:           empId,
           isAdmin:         widget.editEmployee!.isAdmin,
           facialEmbedding: avgEmbedding,
-          username:        widget.editEmployee!.isAdmin ? _usernameController.text : null,
-          password:        widget.editEmployee!.isAdmin ? _passwordController.text : null,
-          isDeleted:       widget.editEmployee!.isDeleted,
+          username: widget.editEmployee!.isAdmin
+              ? _usernameController.text
+              : null,
+          password: widget.editEmployee!.isAdmin
+              ? _passwordController.text
+              : null,
+          isDeleted: widget.editEmployee!.isDeleted,
         );
         await db.updateEmployee(updated);
         _syncProviders();
 
         if (mounted) {
           setState(() {
-            _step         = RegistrationStep.success;
+            _step          = RegistrationStep.success;
             _statusMessage = 'Profile updated successfully!';
           });
         }
       } else {
-        // ENROLL MODE
         final bool isAdmin = _isFirstAdmin;
-
         await db.insertEmployee(
           Employee(
             name:            name,
@@ -396,11 +419,10 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
             empId:           empId,
             isAdmin:         isAdmin,
             facialEmbedding: avgEmbedding,
-            username:        isAdmin ? _usernameController.text.trim() : null,
-            password:        isAdmin ? _passwordController.text.trim() : null,
+            username: isAdmin ? _usernameController.text.trim() : null,
+            password: isAdmin ? _passwordController.text.trim() : null,
           ),
         );
-
         _syncProviders();
 
         if (mounted) {
@@ -430,17 +452,22 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
     ref.invalidate(attendanceLogsWithNamesProvider);
   }
 
-  List<double> _averageEmbeddings(List<List<double>> embeddings) {
-    if (embeddings.isEmpty) return List<double>.filled(128, 0.0);
-    final len = embeddings.first.length;
-    if (len == 0) return List<double>.filled(128, 0.0);
-    final avg = List<double>.filled(len, 0.0);
-    for (final emb in embeddings) {
-      for (int i = 0; i < len; i++) {
-        avg[i] += emb[i];
-      }
-    }
-    return avg.map((v) => v / embeddings.length).toList();
+  // ─── Oval → buffer coordinate mapping ────────────────────────────────────
+
+  /// Maps the visual registration oval to the raw (pre-rotation) camera buffer.
+  /// Must stay in sync with CameraScreen's equivalent helper.
+  Rect _getOvalBufferRect(int bufferWidth, int bufferHeight) {
+    const double nx = 0.5;
+    const double ny = 0.45;
+    final double centerBx = (1.0 - ny) * bufferWidth;
+    final double centerBy = nx * bufferHeight;
+    final double cropSize = bufferHeight * 0.72;
+
+    return Rect.fromCenter(
+      center: Offset(centerBx, centerBy),
+      width:  cropSize,
+      height: cropSize,
+    );
   }
 
   // ─── Step 1: Name Entry Screen ────────────────────────────────────────────
@@ -464,7 +491,8 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
             TextFormField(
               controller: _nameController,
               style: const TextStyle(color: Colors.white),
-              decoration: _buildInputDecoration('e.g. Juan Dela Cruz', Icons.person),
+              decoration:
+                  _buildInputDecoration('e.g. Juan Dela Cruz', Icons.person),
               validator: (v) =>
                   (v == null || v.trim().isEmpty) ? 'Name is required' : null,
             ),
@@ -498,7 +526,8 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
                       TextFormField(
                         controller: _empIdController,
                         enabled: false,
-                        style: const TextStyle(color: Colors.white60),
+                        style:
+                            const TextStyle(color: Colors.white60),
                         decoration: _buildInputDecoration(
                             'ID-XXX', Icons.badge_outlined),
                       ),
@@ -521,9 +550,11 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
                         controller: _ageController,
                         keyboardType: TextInputType.number,
                         style: const TextStyle(color: Colors.white),
-                        decoration: _buildInputDecoration('00', Icons.cake),
-                        validator: (v) =>
-                            (v == null || v.trim().isEmpty) ? 'Required' : null,
+                        decoration:
+                            _buildInputDecoration('00', Icons.cake),
+                        validator: (v) => (v == null || v.trim().isEmpty)
+                            ? 'Required'
+                            : null,
                       ),
                     ],
                   ),
@@ -539,12 +570,14 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
                         value: _selectedSex,
                         dropdownColor: const Color(0xFF161B22),
                         style: const TextStyle(color: Colors.white),
-                        decoration: _buildInputDecoration('', Icons.people),
+                        decoration:
+                            _buildInputDecoration('', Icons.people),
                         items: ['Male', 'Female', 'Other']
-                            .map((s) =>
-                                DropdownMenuItem(value: s, child: Text(s)))
+                            .map((s) => DropdownMenuItem(
+                                value: s, child: Text(s)))
                             .toList(),
-                        onChanged: (v) => setState(() => _selectedSex = v!),
+                        onChanged: (v) =>
+                            setState(() => _selectedSex = v!),
                       ),
                     ],
                   ),
@@ -557,10 +590,11 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
             TextFormField(
               controller: _positionController,
               style: const TextStyle(color: Colors.white),
-              decoration: _buildInputDecoration(
-                  'e.g. Software Engineer', Icons.work),
-              validator: (v) =>
-                  (v == null || v.trim().isEmpty) ? 'Position is required' : null,
+              decoration:
+                  _buildInputDecoration('e.g. Software Engineer', Icons.work),
+              validator: (v) => (v == null || v.trim().isEmpty)
+                  ? 'Position is required'
+                  : null,
             ),
             const SizedBox(height: 20),
 
@@ -572,14 +606,17 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
               decoration:
                   _buildInputDecoration('', Icons.business_rounded),
               items: _departments
-                  .map((d) => DropdownMenuItem(value: d, child: Text(d)))
+                  .map((d) =>
+                      DropdownMenuItem(value: d, child: Text(d)))
                   .toList(),
-              onChanged: (v) => setState(() => _selectedDepartment = v!),
+              onChanged: (v) =>
+                  setState(() => _selectedDepartment = v!),
               validator: (v) =>
                   (v == null || v.isEmpty) ? 'Required' : null,
             ),
 
-            if (_isFirstAdmin || (widget.editEmployee?.isAdmin ?? false)) ...[
+            if (_isFirstAdmin ||
+                (widget.editEmployee?.isAdmin ?? false)) ...[
               const SizedBox(height: 32),
               const Text('Admin Security Credentials',
                   style: TextStyle(
@@ -593,8 +630,9 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
                 style: const TextStyle(color: Colors.white),
                 decoration: _buildInputDecoration(
                     'Username', Icons.admin_panel_settings),
-                validator: (v) =>
-                    (v == null || v.trim().isEmpty) ? 'Username is required' : null,
+                validator: (v) => (v == null || v.trim().isEmpty)
+                    ? 'Username is required'
+                    : null,
               ),
               const SizedBox(height: 16),
               _buildFieldLabel('Admin Password'),
@@ -612,33 +650,41 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
                           : Icons.visibility,
                       color: Colors.white38,
                     ),
-                    onPressed: () =>
-                        setState(() => _obscurePassword = !_obscurePassword),
+                    onPressed: () => setState(
+                        () => _obscurePassword = !_obscurePassword),
                   ),
                 ),
                 validator: (v) {
-                  if (v == null || v.trim().isEmpty) return 'Password is required';
-                  if (v.length < 8) return 'Password must be at least 8 characters';
-                  if (!v.contains(RegExp(r'[A-Z]'))) return 'Must contain an uppercase letter';
-                  if (!v.contains(RegExp(r'[0-9]'))) return 'Must contain a number';
-                  if (!v.contains(RegExp(r'[!@#\$%^&*(),.?":{}|<>_\-]'))) return 'Must contain a special character';
+                  if (v == null || v.trim().isEmpty)
+                    return 'Password is required';
+                  if (v.length < 8)
+                    return 'Password must be at least 8 characters';
+                  if (!v.contains(RegExp(r'[A-Z]')))
+                    return 'Must contain an uppercase letter';
+                  if (!v.contains(RegExp(r'[0-9]')))
+                    return 'Must contain a number';
+                  if (!v.contains(RegExp(r'[!@#\$%^&*(),.?":{}|<>_\-]')))
+                    return 'Must contain a special character';
                   return null;
                 },
               ),
             ],
 
             const SizedBox(height: 48),
-            const SizedBox(height: 48),
 
             SizedBox(
               width: double.infinity,
               height: 58,
               child: ElevatedButton.icon(
-                icon: Icon(_isFirstAdmin || (widget.editEmployee?.isAdmin ?? false)
-                    ? Icons.save_rounded
-                    : Icons.camera_alt_outlined),
+                icon: Icon(
+                  _isFirstAdmin ||
+                          (widget.editEmployee?.isAdmin ?? false)
+                      ? Icons.save_rounded
+                      : Icons.camera_alt_outlined,
+                ),
                 label: Text(
-                  _isFirstAdmin || (widget.editEmployee?.isAdmin ?? false)
+                  _isFirstAdmin ||
+                          (widget.editEmployee?.isAdmin ?? false)
                       ? 'Save Admin Account'
                       : 'Proceed to Face Recognition',
                   style: const TextStyle(
@@ -659,8 +705,10 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
                       final db        = DatabaseService.instance;
                       final employees = await db.getAllEmployees();
 
-                      final String name  = _nameController.text.trim().toLowerCase();
-                      final String empId = _empIdController.text.trim().toLowerCase();
+                      final String name  =
+                          _nameController.text.trim().toLowerCase();
+                      final String empId =
+                          _empIdController.text.trim().toLowerCase();
 
                       final bool exists = employees.any((e) =>
                           (e.name.toLowerCase() == name ||
@@ -720,27 +768,11 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
           borderSide: BorderSide.none),
       focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(14),
-          borderSide:
-              const BorderSide(color: Colors.tealAccent, width: 1.5)),
+          borderSide: const BorderSide(
+              color: Colors.tealAccent, width: 1.5)),
       prefixIcon: Icon(icon, color: Colors.white38, size: 20),
       contentPadding:
           const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-    );
-  }
-  
-  /// Maps the visual registration oval to the raw camera buffer indices.
-  /// Synchronized with CameraScreen for identical recognition context.
-  Rect _getOvalBufferRect(int bufferWidth, int bufferHeight) {
-    const double nx = 0.5;
-    const double ny = 0.45; // Match CameraScreen's center
-    final double centerBx = (1.0 - ny) * bufferWidth;
-    final double centerBy = nx * bufferHeight;
-    final double cropSize = bufferHeight * 0.72;
-
-    return Rect.fromCenter(
-      center: Offset(centerBx, centerBy),
-      width: cropSize,
-      height: cropSize,
     );
   }
 
@@ -780,14 +812,24 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
             children: [
               FloatingActionButton.small(
                 onPressed: _toggleFlash,
-                backgroundColor: _flashMode == FlashMode.torch ? Colors.tealAccent : Colors.black54,
+                backgroundColor: _flashMode == FlashMode.torch
+                    ? Colors.tealAccent
+                    : Colors.black54,
                 child: Icon(
-                  _flashMode == FlashMode.torch ? Icons.flash_on : Icons.flash_off,
-                  color: _flashMode == FlashMode.torch ? Colors.black87 : Colors.white70,
+                  _flashMode == FlashMode.torch
+                      ? Icons.flash_on
+                      : Icons.flash_off,
+                  color: _flashMode == FlashMode.torch
+                      ? Colors.black87
+                      : Colors.white70,
                 ),
               ),
               const SizedBox(height: 8),
-              const Text('FLASH', style: TextStyle(color: Colors.white60, fontSize: 10, fontWeight: FontWeight.bold)),
+              const Text('FLASH',
+                  style: TextStyle(
+                      color: Colors.white60,
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold)),
             ],
           ),
         ),
@@ -814,35 +856,42 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 8),
-              // Sub-frame progress dots
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: List.generate(_subFramesPerPose, (index) {
-                  final active = index < _currentPoseSubEmbeddings.length;
+                  final active =
+                      index < _currentPoseSubEmbeddings.length;
                   return AnimatedContainer(
-                    duration: const Duration(milliseconds: 300),
-                    margin: const EdgeInsets.symmetric(horizontal: 4),
-                    width: active ? 12 : 8,
+                    duration:
+                        const Duration(milliseconds: 300),
+                    margin: const EdgeInsets.symmetric(
+                        horizontal: 4),
+                    width:  active ? 12 : 8,
                     height: 8,
                     decoration: BoxDecoration(
-                      color: active ? Colors.tealAccent : Colors.white24,
-                      borderRadius: BorderRadius.circular(4),
+                      color: active
+                          ? Colors.tealAccent
+                          : Colors.white24,
+                      borderRadius:
+                          BorderRadius.circular(4),
                     ),
                   );
                 }),
               ),
               const SizedBox(height: 16),
               LinearProgressIndicator(
-                value:            progress,
-                backgroundColor:  Colors.white24,
-                valueColor: const AlwaysStoppedAnimation<Color>(Colors.tealAccent),
-                borderRadius:     BorderRadius.circular(4),
-                minHeight:        8,
+                value:           progress,
+                backgroundColor: Colors.white24,
+                valueColor: const AlwaysStoppedAnimation<Color>(
+                    Colors.tealAccent),
+                borderRadius: BorderRadius.circular(4),
+                minHeight:    8,
               ),
               const SizedBox(height: 8),
               Text(
                   'Orientation: ${_capturedEmbeddings.length + 1} of 5',
-                  style: const TextStyle(color: Colors.white60, fontSize: 12)),
+                  style: const TextStyle(
+                      color: Colors.white60, fontSize: 12)),
             ],
           ),
         ),
@@ -869,7 +918,9 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
             ),
             const SizedBox(height: 24),
             Text(
-              isSuccess ? 'Registration Successful!' : 'Registration Failed',
+              isSuccess
+                  ? 'Registration Successful!'
+                  : 'Registration Failed',
               style: const TextStyle(
                   color: Colors.white,
                   fontSize: 24,
@@ -878,7 +929,8 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
             const SizedBox(height: 12),
             Text(
               isSuccess ? _statusMessage : _errorMessage,
-              style: const TextStyle(color: Colors.white60, fontSize: 15),
+              style:
+                  const TextStyle(color: Colors.white60, fontSize: 15),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 40),
@@ -889,7 +941,7 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
                   if (isSuccess) {
                     if (widget.editEmployee == null && _isFirstAdmin) {
                       Navigator.of(context)
-                          .pushNamedAndRemoveUntil('/', (route) => false);
+                          .pushNamedAndRemoveUntil('/', (r) => false);
                     } else {
                       Navigator.of(context).pop();
                     }
@@ -898,7 +950,8 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
                   }
                 },
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: isSuccess ? Colors.teal : Colors.white12,
+                  backgroundColor:
+                      isSuccess ? Colors.teal : Colors.white12,
                   foregroundColor: Colors.white,
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(14)),
@@ -927,7 +980,8 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
         title: const Text('Possible Duplicate Face',
             style: TextStyle(color: Colors.orangeAccent)),
         content: Text(
-          'This face appears to match an already registered employee: $matchedName.\n\nAre you sure you want to proceed?',
+          'This face appears to match an already registered employee: '
+          '$matchedName.\n\nAre you sure you want to proceed?',
           style: const TextStyle(color: Colors.white70),
         ),
         actions: [
@@ -938,7 +992,8 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
           ),
           ElevatedButton(
             onPressed: () => Navigator.pop(context, true),
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.teal),
+            style:
+                ElevatedButton.styleFrom(backgroundColor: Colors.teal),
             child: const Text('Proceed Anyway'),
           ),
         ],
@@ -950,17 +1005,20 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
 
   @override
   Widget build(BuildContext context) {
-    String title = switch (_step) {
-      RegistrationStep.enterName  => widget.editEmployee != null ? 'Update Profile' : 'Register Employee',
-      RegistrationStep.scanFace   => widget.editEmployee != null ? 'Re-enroll Face' : 'Enroll Face',
-      RegistrationStep.processing => widget.editEmployee != null ? 'Updating…' : 'Enrolling…',
+    final title = switch (_step) {
+      RegistrationStep.enterName  =>
+          widget.editEmployee != null ? 'Update Profile' : 'Register Employee',
+      RegistrationStep.scanFace   =>
+          widget.editEmployee != null ? 'Re-enroll Face' : 'Enroll Face',
+      RegistrationStep.processing =>
+          widget.editEmployee != null ? 'Updating…' : 'Enrolling…',
       RegistrationStep.success    => 'Complete',
       RegistrationStep.error      => 'Failure',
     };
 
-    Widget body = switch (_step) {
-      RegistrationStep.enterName => _buildNameEntry(),
-      RegistrationStep.scanFace  => _buildFaceScan(),
+    final body = switch (_step) {
+      RegistrationStep.enterName  => _buildNameEntry(),
+      RegistrationStep.scanFace   => _buildFaceScan(),
       RegistrationStep.processing => const Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -986,13 +1044,14 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
         iconTheme: const IconThemeData(color: Colors.white),
         leading: _step == RegistrationStep.scanFace
             ? IconButton(
-                icon: const Icon(Icons.arrow_back_ios_new, color: Colors.white70),
+                icon: const Icon(Icons.arrow_back_ios_new,
+                    color: Colors.white70),
                 onPressed: () {
                   _cameraController?.stopImageStream();
                   setState(() {
-                    _step        = RegistrationStep.enterName;
+                    _step          = RegistrationStep.enterName;
                     _capturedEmbeddings.clear();
-                    _currentPose  = RegistrationPose.front;
+                    _currentPose   = RegistrationPose.front;
                     _isCameraReady = false;
                   });
                 },
@@ -1007,7 +1066,7 @@ class _RegistrationScreenState extends ConsumerState<RegistrationScreen> {
   }
 }
 
-// ─── Poses Graphic ──────────────────────────────────────────────────────────
+// ─── Pose Graphic ─────────────────────────────────────────────────────────────
 
 class _PoseGraphic extends StatelessWidget {
   final RegistrationPose pose;
@@ -1028,13 +1087,14 @@ class _PoseGraphic extends StatelessWidget {
       duration: const Duration(milliseconds: 400),
       curve:    Curves.elasticOut,
       tween:    Tween(begin: Offset.zero, end: offset),
-      builder: (context, val, child) {
+      builder:  (context, val, child) {
         return Transform.translate(
           offset: val,
           child: Container(
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
-                color: Colors.teal.withAlpha(200), shape: BoxShape.circle),
+                color: Colors.teal.withAlpha(200),
+                shape: BoxShape.circle),
             child: Icon(icon, color: Colors.white, size: 40),
           ),
         );
@@ -1053,12 +1113,13 @@ class _GuidedOvalPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final cx    = size.width / 2;
-    final cy    = size.height * 0.45; // Match Scanner's 0.45
-    final ovalW = size.width * 0.65; // Unified width
+    final cy    = size.height * 0.45;
+    final ovalW = size.width * 0.65;
     final ovalH = ovalW * 1.35;
     final rect  = Rect.fromCenter(
         center: Offset(cx, cy), width: ovalW, height: ovalH);
 
+    // Dim area outside the oval
     canvas.drawPath(
       Path.combine(
         PathOperation.difference,
@@ -1068,22 +1129,28 @@ class _GuidedOvalPainter extends CustomPainter {
       Paint()..color = Colors.black54,
     );
 
-    final paint = Paint()
-      ..color      = Colors.white24
-      ..strokeWidth = 3
-      ..style      = PaintingStyle.stroke;
+    // Oval border
+    canvas.drawOval(
+      rect,
+      Paint()
+        ..color      = Colors.white24
+        ..strokeWidth = 3
+        ..style      = PaintingStyle.stroke,
+    );
 
-    canvas.drawOval(rect, paint);
-
-    final activePaint = Paint()
-      ..color      = Colors.tealAccent
-      ..strokeWidth = 6
-      ..style      = PaintingStyle.stroke
-      ..strokeCap  = StrokeCap.round;
-
+    // Progress arc
     if (pose != RegistrationPose.done) {
-      final sweep = 2 * 3.14159 * progress;
-      canvas.drawArc(rect, -3.14159 / 2, sweep, false, activePaint);
+      canvas.drawArc(
+        rect,
+        -3.14159 / 2,
+        2 * 3.14159 * progress,
+        false,
+        Paint()
+          ..color      = Colors.tealAccent
+          ..strokeWidth = 6
+          ..style      = PaintingStyle.stroke
+          ..strokeCap  = StrokeCap.round,
+      );
     }
   }
 
